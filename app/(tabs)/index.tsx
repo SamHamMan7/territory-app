@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import MapView, { Polygon, Polyline, Region } from 'react-native-maps';
+import { ActivityIndicator, Alert, Keyboard, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import MapView, { Circle, Polygon, Polyline, Region } from 'react-native-maps';
+
 
 const POLYGONS_KEY = 'territory_polygons_v1';
 
@@ -22,7 +23,7 @@ const getIntersection = (p1: Coord, p2: Coord, p3: Coord, p4: Coord): boolean =>
 // --- MISSIONS ---
 const MISSIONS = [
   { name: "My Street", zoom: 0.002, label: "Street" },
-  { name: "My School", zoom: 0.01, label: "Campus" },
+  { name: "My Neighborhood", zoom: 0.01, label: "Neighbor" },
   { name: "My City", zoom: 0.05, label: "City" },
 ];
 
@@ -31,6 +32,10 @@ export default function App() {
   const [path, setPath] = useState<Coord[]>([]);
   const [polygons, setPolygons] = useState<{ coords: Coord[]; type: string }[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
+
+  //Target Search and Zone
+  const [searchText, setSearchText] = useState("");
+  const [targetZone, setTargetZone] = useState<{ latitude: number; longitude: number; radius: number } | null>(null);
 
   // Mission state
   const [targetName, setTargetName] = useState<string>('Free Roam');
@@ -136,7 +141,7 @@ export default function App() {
               const closed = closeLoop(loop);
 
               // Basic quality filter: require several points and a minimal area
-              if (closed.length >= 4 && polygonAreaDegrees(closed) > 1e-6) {
+              if (closed.length >= 4 && polygonAreaDegrees(closed) > 1.0e-8) {
                 setPolygons(prev => [...prev, { coords: closed, type: targetName }]);
                 // lightweight feedback
                 showToast(`Captured: ${targetName}`);
@@ -180,6 +185,45 @@ export default function App() {
     }
   };
 
+  // Search helper: locate a named place and center map
+  const searchLocation = async () => {
+    Keyboard.dismiss();
+    if (searchText.trim() === '') {
+      Alert.alert('Please enter a location to search.');
+      return;
+    }
+
+    try {
+      const geocode = await Location.geocodeAsync(searchText);
+      if (geocode.length === 0) {
+        Alert.alert('Location not found. Please try a different search term.');
+        return;
+      }
+
+      const location = geocode[0];
+      const region: Region = {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      };
+
+      setTargetZone({
+        latitude: location.latitude,
+        longitude: location.longitude,
+        radius: 200,
+      });
+
+      setInitialRegion(region);
+      if (mapRef.current) {
+        try { mapRef.current.animateToRegion(region, 1000); } catch (e) { /* ignore */ }
+      }
+    } catch (error) {
+      Alert.alert('Error searching location. Please try again.');
+      console.warn('Geocoding error:', error);
+    }
+  };
+
   if (!initialRegion) {
     return (
       <View style={[styles.container, styles.loading]}>
@@ -207,7 +251,30 @@ export default function App() {
         ))}
 
         <Polyline coordinates={path} strokeColor="red" strokeWidth={5} />
+
+        {/* Target Zone Circle */}
+        {targetZone && (
+          <Circle
+            center={{ latitude: targetZone.latitude, longitude: targetZone.longitude }}
+            radius={targetZone.radius}
+            strokeColor="rgba(0, 0, 255, 0.3)"
+            fillColor="rgba(0, 0, 255, 0.1)"
+            strokeWidth={2}
+          />
+        )}
       </MapView>
+
+      <View style = {styles.searchContainer}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search location..."
+          placeholderTextColor="#667"
+          value={searchText}
+          onChangeText={setSearchText}
+          onSubmitEditing={searchLocation}
+          returnKeyType="search"
+        />
+      </View>
 
       {toast ? (
         <View style={styles.toast} pointerEvents="none">
@@ -253,7 +320,7 @@ const styles = StyleSheet.create({
   toast: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20, zIndex: 999, elevation: 6 },
   toastText: { color: 'white', fontWeight: '600' },
 
-  missionBtn: { position: 'absolute', top: 60, alignSelf: 'center', backgroundColor: 'white', padding: 15, borderRadius: 30, elevation: 5, shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity:0.3 },
+  missionBtn: { position: 'absolute', top: 90, alignSelf: 'center', backgroundColor: 'white', padding: 15, borderRadius: 30, elevation: 5, shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity:0.3 },
   missionText: { fontWeight: 'bold', fontSize: 16 },
 
   modalContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
@@ -262,4 +329,22 @@ const styles = StyleSheet.create({
   optionBtn: { width: '100%', padding: 15, borderBottomWidth: 1, borderColor: '#eee', alignItems: 'center' },
   optionText: { fontSize: 18 },
   closeBtn: { marginTop: 20, padding: 10 },
+
+  searchContainer: {
+    position: 'absolute',
+    top: 14,
+    width: '90%',
+    alignSelf: 'center',
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 5,
+    elevation: 5,
+    zIndex: 10
+  },
+  searchInput: {
+    height: 40,
+    paddingHorizontal: 10,
+    fontSize: 16,
+    color: '#000'
+  }
 });

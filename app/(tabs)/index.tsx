@@ -2,13 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import MapView, { Circle, Marker, Polygon, Polyline, Region } from 'react-native-maps';
+import MapView, { Circle, Polygon, Polyline, Region } from 'react-native-maps';
 
-const POLYGONS_KEY = 'territory_polygons_v6'; // Version up for new features
+const POLYGONS_KEY = 'territory_polygons_v8'; // Tycoon Update
 
 // --- TYPES ---
 type Coord = { latitude: number; longitude: number };
 type TerritoryType = 'street' | 'landmark' | 'city' | 'unknown';
+type BuildingType = 'none' | 'factory' | 'bunker';
+
 type Territory = { 
   coords: Coord[]; 
   id: string;
@@ -16,6 +18,7 @@ type Territory = {
   type: TerritoryType;
   area: number;
   level: number; 
+  building: BuildingType; // NEW: What is built here?
   date: string;
 };
 
@@ -33,7 +36,6 @@ const getDistance = (p1: Coord, p2: Coord) => {
   return R * c; 
 };
 
-// Intersection for Loop Detection
 const getIntersection = (p1: Coord, p2: Coord, p3: Coord, p4: Coord): boolean => {
   const d1 = (p2.latitude - p1.latitude) * (p3.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p3.latitude - p1.latitude);
   const d2 = (p2.latitude - p1.latitude) * (p4.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p4.latitude - p1.latitude);
@@ -49,7 +51,6 @@ const getCentroid = (coords: Coord[]) => {
   return { latitude: lat / coords.length, longitude: lng / coords.length };
 };
 
-// Calculate Polygon Area (approx m^2)
 const getPolygonArea = (coords: Coord[]) => {
   let area = 0;
   const n = coords.length;
@@ -68,22 +69,18 @@ export default function App() {
   const [polygons, setPolygons] = useState<Territory[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
 
-  // Economy & State
-  const [cash, setCash] = useState(100); 
-  const [activeTab, setActiveTab] = useState<'explore' | 'profile'>('explore');
-  const distanceTraveledRef = useRef(0); 
+  // Economy
+  const [cash, setCash] = useState(500); // Start rich for testing
+  const [lastCollected, setLastCollected] = useState(Date.now());
+  const [activeTab, setActiveTab] = useState<'shop' | 'explore' | 'profile'>('explore');
 
-  // Search & Target
+  // Search
   const [searchText, setSearchText] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]); // For the dropdown
+  const [searchResults, setSearchResults] = useState<any[]>([]); 
   const [isSearching, setIsSearching] = useState(false);
   const [targetZone, setTargetZone] = useState<{ latitude: number; longitude: number; radius: number, name: string } | null>(null);
-  
-  // Lootbox State
-  const [lootbox, setLootbox] = useState<{coord: Coord, amount: number} | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // --- HELPERS ---
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
@@ -95,6 +92,9 @@ export default function App() {
       try {
         const raw = await AsyncStorage.getItem(POLYGONS_KEY);
         if (raw) setPolygons(JSON.parse(raw));
+        
+        const time = await AsyncStorage.getItem('last_collected');
+        if (time) setLastCollected(parseInt(time));
       } catch (e) { console.warn('Failed to load:', e); }
     };
     load();
@@ -102,220 +102,217 @@ export default function App() {
 
   useEffect(() => {
     const save = async () => {
-      try { await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons)); } 
-      catch (e) { console.warn('Failed to save:', e); }
+      try { 
+          await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons));
+          await AsyncStorage.setItem('last_collected', lastCollected.toString());
+      } catch (e) {}
     };
     const t = setTimeout(save, 500);
     return () => clearTimeout(t);
-  }, [polygons]);
+  }, [polygons, lastCollected]);
 
-  // --- THE GAME ENGINE ---
+  // --- GAME ENGINE ---
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
-
     const startTracking = async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-
+      
       const loc = await Location.getCurrentPositionAsync({});
-      setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-      setInitialRegion({
-        latitude: loc.coords.latitude, longitude: loc.coords.longitude,
-        latitudeDelta: 0.005, longitudeDelta: 0.005,
-      });
+      setUserLocation(loc.coords);
+      setInitialRegion({ latitude: loc.coords.latitude, longitude: loc.coords.longitude, latitudeDelta: 0.005, longitudeDelta: 0.005 });
 
-      subscription = await Location.watchPositionAsync({
-        accuracy: Location.Accuracy.High, distanceInterval: 5,
-      }, async (newLoc) => {
-        const newPoint: Coord = { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude };
-        
-        // 1. LOOTBOX LOGIC (Every 50m)
-        if (userLocation) {
-            const step = getDistance(userLocation, newPoint);
-            distanceTraveledRef.current += step;
-            if (distanceTraveledRef.current > 50) {
-                distanceTraveledRef.current = 0;
-                // 5% Chance
-                if (Math.random() < 0.05) {
-                    setLootbox({ coord: newPoint, amount: Math.floor(Math.random() * 50) + 10 });
-                    Alert.alert("🎁 MYSTERY CRATE FOUND!", "You stumbled upon a hidden stash nearby!");
-                }
-            }
-        }
-
+      subscription = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 4 }, async (newLoc) => {
+        const newPoint = { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude };
         setUserLocation(newPoint);
 
-        // 2. CHECK LOOTBOX PICKUP
-        if (lootbox && getDistance(newPoint, lootbox.coord) < 20) {
-            setCash(c => c + lootbox.amount);
-            Alert.alert("💰 LOOT SECURED", `You found $${lootbox.amount}!`);
-            setLootbox(null);
-        }
+        setPath((curr) => {
+          if (curr.length > 400) curr = curr.slice(-200);
+          const updated = [...curr, newPoint];
 
-        // 3. PATH & LOOPS
-        setPath((currentPath) => {
-          if (currentPath.length > 400) currentPath = currentPath.slice(-200);
-          const updatedPath = [...currentPath, newPoint];
-
-          if (updatedPath.length >= 4) {
-            const lastPoint = updatedPath[updatedPath.length - 1];
-            for (let i = Math.max(0, updatedPath.length - 50); i < updatedPath.length - 2; i++) {
-               const start = updatedPath[i];
-               const end = updatedPath[i + 1];
-               
-               if (getIntersection(lastPoint, newPoint, start, end)) {
-                 const loop = updatedPath.slice(i);
+          // Loop Detection
+          if (updated.length >= 4) {
+            const last = updated[updated.length - 1];
+            for (let i = Math.max(0, updated.length - 50); i < updated.length - 2; i++) {
+               if (getIntersection(last, newPoint, updated[i], updated[i + 1])) {
+                 const loop = updated.slice(i);
                  const closed = [...loop, loop[0]]; 
                  const area = getPolygonArea(closed);
 
-                 if (area < 50) return updatedPath; 
+                 // Lowered threshold to 20sqm so you can test it easily!
+                 if (area < 20) return updated; 
 
-                 // Identify Territory
                  const center = getCentroid(closed);
-                 
                  (async () => {
-                    let name = "Unknown Territory";
+                    let name = "Unknown Land";
                     let type: TerritoryType = 'street'; 
                     let bonus = 0;
 
-                    // A. Target Hit?
                     if (targetZone && getDistance(center, targetZone) < targetZone.radius) {
                         name = targetZone.name;
                         type = 'landmark';
                         bonus = 500;
-                        setTargetZone(null); 
-                        setSearchText("");
+                        setTargetZone(null); setSearchText("");
                         Alert.alert("🎯 TARGET CONQUERED", `You captured ${name}!\nBonus: $500`);
                     } else {
-                        // B. Reverse Geocode
                         try {
-                            const [address] = await Location.reverseGeocodeAsync(center);
-                            if (address) {
-                                if (area > 20000) {
-                                    name = address.city || address.district || "City Sector";
-                                    type = 'city';
-                                    bonus = 100;
-                                } else {
-                                    name = address.street || address.name || "Unnamed Road";
-                                    type = 'street';
-                                    bonus = 20;
-                                }
+                            const [addr] = await Location.reverseGeocodeAsync(center);
+                            if (addr) {
+                                if (area > 20000) { name = addr.district || "Sector"; type = 'city'; bonus = 100; } 
+                                else { name = addr.name || addr.street || "Road"; type = 'street'; bonus = 20; }
                             }
-                        } catch (e) { console.log("Geocode failed"); }
+                        } catch (e) {}
                     }
 
-                    const newTerritory: Territory = {
-                        coords: closed,
-                        id: Date.now().toString(),
-                        name: name,
-                        type: type,
-                        area: Math.floor(area),
-                        level: 1,
+                    const newT: Territory = {
+                        coords: closed, id: Date.now().toString(), name, type, 
+                        area: Math.floor(area), level: 1, building: 'none', 
                         date: new Date().toLocaleDateString()
                     };
-
-                    setPolygons(prev => [...prev, newTerritory]);
+                    setPolygons(p => [...p, newT]);
                     setCash(c => c + 10 + bonus);
-                    showToast(`Captured: ${name} (+$${10 + bonus})`);
+                    showToast(`Captured: ${name}`);
                  })();
-
                  return [newPoint]; 
                }
             }
           }
-          return updatedPath;
+          return updated;
         });
       });
     };
     startTracking();
     return () => { if (subscription) subscription.remove(); };
-  }, [targetZone, lootbox, userLocation]); 
+  }, [targetZone]); 
 
-  // --- SMART SEARCH ENGINE ---
+  // --- SMART SEARCH (With Auto-Correction) ---
   const performSearch = async () => {
     Keyboard.dismiss();
     if (!searchText.trim()) return;
-    
     setIsSearching(true);
+
+    const doSearch = async (query: string) => {
+        const results = await Location.geocodeAsync(query);
+        if (results.length > 0) return results;
+        return [];
+    };
+
     try {
-      // 1. Get raw results
-      const results = await Location.geocodeAsync(searchText);
-      
+      // 1. Try exact search
+      let results = await doSearch(searchText);
+
+      // 2. If failed, try appending current city (Smart Retry)
+      if (results.length === 0 && userLocation) {
+          const [addr] = await Location.reverseGeocodeAsync(userLocation);
+          if (addr && addr.city) {
+              const smartQuery = `${searchText} ${addr.city}`;
+              console.log("Smart Retry:", smartQuery);
+              results = await doSearch(smartQuery);
+          }
+      }
+
       if (results.length === 0) {
-        Alert.alert("No Results", "Try a more specific name.");
+        Alert.alert("Not Found", "Try adding a city name (e.g., 'McDonalds Houston')");
         setIsSearching(false);
         return;
       }
 
-      // 2. ENRICH: Calculate distance to USER for each result
-      const enrichedResults = await Promise.all(results.map(async (res: any) => {
-          let dist = 999999;
-          let streetName = "Unknown Location";
-
-          // Calculate distance if we know where user is
-          if (userLocation) {
-              dist = getDistance(userLocation, {latitude: res.latitude, longitude: res.longitude});
-          }
-
-          // Reverse Geocode to get a pretty name (e.g. "Main St")
+      // 3. Process & Sort Results
+      const enriched = await Promise.all(results.map(async (res: any) => {
+          let dist = userLocation ? getDistance(userLocation, {latitude: res.latitude, longitude: res.longitude}) : 0;
+          let label = "Location";
           try {
-              const [address] = await Location.reverseGeocodeAsync({latitude: res.latitude, longitude: res.longitude});
-              if (address) {
-                  streetName = address.name || address.street || address.city || "Location";
-              }
+              const [a] = await Location.reverseGeocodeAsync({latitude: res.latitude, longitude: res.longitude});
+              if (a) label = a.name || a.street || a.city || "Point";
           } catch(e) {}
-
-          return { ...res, dist, streetName };
+          return { ...res, dist, label };
       }));
 
-      // 3. SORT: Closest first
-      enrichedResults.sort((a, b) => a.dist - b.dist);
-
-      // 4. Show top 5
-      setSearchResults(enrichedResults.slice(0, 5));
+      enriched.sort((a, b) => a.dist - b.dist);
+      setSearchResults(enriched.slice(0, 5)); // Show top 5
       setIsSearching(false);
 
     } catch (e) { 
-        Alert.alert('Error', 'Check internet.'); 
+        Alert.alert('Error', 'Search failed. Check internet.'); 
         setIsSearching(false);
     }
   };
 
   const selectSearchResult = (result: any) => {
       const region = { latitude: result.latitude, longitude: result.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 };
-      
-      // Use the user's search text as the "Mission Name", but add the street
-      const missionName = `${searchText} (${result.streetName})`;
-      
+      const missionName = `${searchText} (${result.label})`;
       setTargetZone({ latitude: result.latitude, longitude: result.longitude, radius: 150, name: missionName });
       setInitialRegion(region);
       mapRef.current?.animateToRegion(region, 1000);
-      setSearchResults([]); // Hide dropdown
-      showToast(`Target Set: ${Math.floor(result.dist)}m away`);
+      setSearchResults([]); 
+      showToast(`Target Set! ${Math.floor(result.dist)}m away`);
   };
 
-  // --- UPGRADE ENGINE ---
+  // --- BUILD & UPGRADE SYSTEM ---
   const handleTerritoryPress = (index: number) => {
     const t = polygons[index];
-    const cost = 100;
     
     Alert.alert(
       t.name, 
-      `Level: ${t.level}\nArea: ${t.area}m²\n\nUpgrade for $${cost}?`,
+      `Type: ${t.type.toUpperCase()}\nBuilding: ${t.building.toUpperCase() || "None"}`,
       [
         { text: "Cancel", style: "cancel" },
-        { text: "UPGRADE ($100)", onPress: () => {
-            if (cash < cost) { Alert.alert("Not enough cash!"); return; }
-            if (t.level >= 2) { Alert.alert("Max Level!"); return; }
-            
-            setCash(c => c - cost);
-            const updated = [...polygons];
-            updated[index].level = 2;
-            setPolygons(updated);
-            showToast(`Upgraded ${t.name}!`);
-        }}
+        { text: "Build Factory ($300)", onPress: () => buildStructure(index, 'factory', 300) },
+        { text: "Upgrade Land ($100)", onPress: () => buildStructure(index, 'upgrade', 100) }
       ]
     );
+  };
+
+  const buildStructure = (index: number, type: 'factory' | 'upgrade', cost: number) => {
+      if (cash < cost) { Alert.alert("Insufficient Funds"); return; }
+      
+      const updated = [...polygons];
+      const t = updated[index];
+
+      if (type === 'factory') {
+          if (t.building !== 'none') { Alert.alert("Occupied", "Already has a building!"); return; }
+          t.building = 'factory';
+          showToast("Factory Built! 🏭");
+      } else {
+          if (t.level >= 2) { Alert.alert("Max Level"); return; }
+          t.level = 2;
+          showToast("Land Upgraded! ⭐");
+      }
+
+      setCash(c => c - cost);
+      setPolygons(updated);
+  };
+
+  // --- INCOME COLLECTION ---
+  const collectIncome = () => {
+      const now = Date.now();
+      const minsPassed = (now - lastCollected) / 60000;
+      
+      if (minsPassed < 1) {
+          Alert.alert("Chill!", "Production in progress. Check back later.");
+          return;
+      }
+
+      // LOGIC: Factories make money based on nearby CITIES
+      // Base: $10 per factory.
+      // Bonus: +$5 for every City territory you own.
+      const factories = polygons.filter(p => p.building === 'factory').length;
+      const cities = polygons.filter(p => p.type === 'city').length;
+      
+      if (factories === 0) {
+          Alert.alert("No Industry", "Build factories on your land to earn passive income.");
+          return;
+      }
+
+      const incomePerFactory = 10 + (cities * 5);
+      const totalIncome = Math.floor(factories * incomePerFactory * minsPassed); // Scale by time
+
+      // Cap at 24 hours to prevent overflow logic
+      const payout = Math.min(totalIncome, factories * 5000);
+
+      setCash(c => c + payout);
+      setLastCollected(now);
+      Alert.alert("💰 PAYDAY", `Factories produced $${payout}!\n(Based on ${cities} Cities owned)`);
   };
 
   // --- RENDERERS ---
@@ -329,11 +326,11 @@ export default function App() {
             followsUserLocation={true}
         >
             {polygons.map((poly, index) => {
-                const isNeon = poly.level > 1;
-                let fill = isNeon ? "rgba(0,255,255,0.3)" : "rgba(255,215,0,0.2)"; 
-                let stroke = isNeon ? "cyan" : "orange";
-                if (poly.type === 'landmark') { fill = "rgba(255,0,255,0.3)"; stroke = "magenta"; }
-                
+                let fill = "rgba(255,215,0,0.2)"; 
+                let stroke = "orange";
+                if (poly.level > 1) { fill = "rgba(0,255,255,0.3)"; stroke = "cyan"; }
+                if (poly.building === 'factory') { fill = "rgba(100,100,100,0.6)"; stroke = "black"; }
+
                 return (
                 <Polygon
                     key={poly.id}
@@ -349,29 +346,13 @@ export default function App() {
             
             <Polyline coordinates={path} strokeColor="red" strokeWidth={4} />
 
-            {/* DOTTED LINE TO TARGET */}
             {targetZone && userLocation && (
-                <Polyline 
-                    coordinates={[userLocation, targetZone]} 
-                    strokeColor="lime" 
-                    strokeWidth={3} 
-                    lineDashPattern={[10, 10]} 
-                />
+                <Polyline coordinates={[userLocation, targetZone]} strokeColor="lime" strokeWidth={3} lineDashPattern={[10, 10]} />
             )}
-
-            {targetZone && (
-                <Circle center={targetZone} radius={targetZone.radius} fillColor="rgba(0,255,0,0.2)" strokeColor="lime" />
-            )}
-            
-            {lootbox && (
-                <Marker coordinate={lootbox.coord} title="MYSTERY CRATE">
-                    <View style={styles.lootboxMarker}><Text>🎁</Text></View>
-                </Marker>
-            )}
-
+            {targetZone && <Circle center={targetZone} radius={targetZone.radius} fillColor="rgba(0,255,0,0.2)" strokeColor="lime" />}
         </MapView>
 
-        {/* SEARCH BAR */}
+        {/* SEARCH HUD */}
         <View style={styles.topHud}>
             <View style={styles.searchBar}>
                 <TextInput
@@ -383,106 +364,103 @@ export default function App() {
                     onSubmitEditing={performSearch}
                 />
                 <TouchableOpacity onPress={performSearch} style={styles.searchBtn}>
-                    {isSearching ? <ActivityIndicator color="black" size="small"/> : <Text>🔍</Text>}
+                    {isSearching ? <ActivityIndicator size="small" color="black"/> : <Text>🔍</Text>}
                 </TouchableOpacity>
             </View>
 
-            {/* SMART RESULTS DROPDOWN */}
             {searchResults.length > 0 && (
                 <View style={styles.dropdown}>
-                    <Text style={styles.dropdownHeader}>Select Closest Match:</Text>
+                    <Text style={styles.dropdownHeader}>Select Target:</Text>
                     {searchResults.map((res, i) => (
                         <TouchableOpacity key={i} style={styles.resultItem} onPress={() => selectSearchResult(res)}>
-                            <Text style={styles.resultTextBold}>
-                                {searchText} ({i+1})
-                            </Text>
-                            <Text style={styles.resultSub}>
-                                {res.streetName} • {Math.floor(res.dist)}m away
-                            </Text>
+                            <Text style={{fontWeight:'bold'}}>{res.label}</Text>
+                            <Text style={{fontSize:12, color:'#666'}}>{Math.floor(res.dist)}m away</Text>
                         </TouchableOpacity>
                     ))}
-                    <TouchableOpacity style={styles.cancelSearch} onPress={() => setSearchResults([])}>
-                        <Text style={{color:'red'}}>Cancel</Text>
-                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.cancelSearch} onPress={() => setSearchResults([])}><Text style={{color:'red'}}>Close</Text></TouchableOpacity>
                 </View>
             )}
         </View>
 
-        {/* TARGET HUD */}
-        {targetZone && (
-             <View style={styles.targetHud}>
-                 <Text style={{color:'white', fontWeight:'bold'}}>TARGET: {targetZone.name}</Text>
-             </View>
-        )}
-
+        {targetZone && <View style={styles.targetHud}><Text style={{color:'white', fontWeight:'bold'}}>TARGET: {targetZone.name}</Text></View>}
         {toast && <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View>}
     </View>
   );
 
   const renderProfile = () => {
-    const streets = polygons.filter(p => p.type === 'street');
-    const landmarks = polygons.filter(p => p.type === 'landmark');
+    const factories = polygons.filter(p => p.building === 'factory').length;
+    const cities = polygons.filter(p => p.type === 'city').length;
     
-    let distText = "No active target";
-    if (targetZone && userLocation) {
-        const d = Math.floor(getDistance(userLocation, targetZone));
-        distText = `${d} meters away`;
-    }
-
     return (
         <ScrollView style={styles.profileContainer}>
-            <Text style={styles.headerTitle}>Commander Profile</Text>
+            <Text style={styles.headerTitle}>Tycoon Profile</Text>
             
             <View style={styles.statCard}>
                 <Text style={styles.cashLarge}>${cash}</Text>
-                <Text style={styles.subLabel}>WAR CHEST</Text>
-            </View>
-
-            <View style={[styles.section, {borderColor: 'lime', borderWidth: 1}]}>
-                <Text style={[styles.sectionTitle, {color: 'green'}]}>CURRENT MISSION</Text>
-                <Text style={styles.targetName}>{targetZone ? targetZone.name : "None Set"}</Text>
-                <Text style={styles.targetStatus}>{targetZone ? `Distance: ${distText}` : "Search a place to set target"}</Text>
+                <Text style={styles.subLabel}>NET WORTH</Text>
+                <TouchableOpacity style={styles.collectBtn} onPress={collectIncome}>
+                    <Text style={{fontWeight:'bold'}}>COLLECT FACTORY INCOME</Text>
+                </TouchableOpacity>
             </View>
 
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>🏰 LANDMARKS ({landmarks.length})</Text>
-                {landmarks.map(p => (
-                    <Text key={p.id} style={styles.rowTextBold}>{p.name}</Text>
-                ))}
-                {landmarks.length === 0 && <Text style={styles.emptyText}>Capture highlighted targets.</Text>}
+                <Text style={styles.sectionTitle}>🏭 INDUSTRY</Text>
+                <Text style={styles.simpleRow}>Factories Owned: {factories}</Text>
+                <Text style={styles.simpleRow}>Cities Connected: {cities}</Text>
+                <Text style={{color:'green', marginTop:5}}>Current Rate: ${factories * (10 + cities*5)} / min</Text>
             </View>
 
             <View style={styles.section}>
-                <Text style={styles.sectionTitle}>🛣️ STREETS ({streets.length})</Text>
-                {streets.map(p => (
-                    <Text key={p.id} style={styles.simpleRow}>{p.name} {p.level > 1 ? "⭐" : ""}</Text>
+                <Text style={styles.sectionTitle}>🗺️ TERRITORIES ({polygons.length})</Text>
+                {polygons.map(p => (
+                    <Text key={p.id} style={styles.rowText}>
+                        {p.name} {p.building === 'factory' ? "🏭" : ""} {p.level > 1 ? "⭐" : ""}
+                    </Text>
                 ))}
             </View>
-
             <View style={{height: 100}} /> 
         </ScrollView>
     );
   };
+
+  const renderShop = () => (
+    <View style={styles.profileContainer}>
+        <Text style={styles.headerTitle}>Asset Management</Text>
+        <Text style={{textAlign:'center', marginBottom:20}}>Cash Available: ${cash}</Text>
+        
+        <View style={styles.shopItem}>
+            <Text style={styles.shopTitle}>🏭 Industrial Factory</Text>
+            <Text style={styles.shopCost}>Cost: $300</Text>
+            <Text style={styles.shopDesc}>Generates passive income. Bonus cash if you own nearby Cities.</Text>
+            <Text style={{fontStyle:'italic', marginTop:5}}>How to build: Tap a territory on the Explore map.</Text>
+        </View>
+
+        <View style={styles.shopItem}>
+            <Text style={styles.shopTitle}>⭐ Urban Upgrade</Text>
+            <Text style={styles.shopCost}>Cost: $100</Text>
+            <Text style={styles.shopDesc}>Increases the value of a territory.</Text>
+        </View>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
         <View style={styles.content}>
             {activeTab === 'explore' && renderMap()}
             {activeTab === 'profile' && renderProfile()}
+            {activeTab === 'shop' && renderShop()}
         </View>
 
         <View style={styles.navBar}>
-            <TouchableOpacity 
-                style={[styles.navBtn, activeTab === 'explore' && styles.activeNav]} 
-                onPress={() => setActiveTab('explore')}>
+            <TouchableOpacity style={styles.navBtn} onPress={() => setActiveTab('shop')}>
+                <Text style={[styles.navText, activeTab === 'shop' && styles.activeText]}>ASSETS</Text>
+            </TouchableOpacity>
+            <View style={styles.divider} />
+            <TouchableOpacity style={styles.navBtn} onPress={() => setActiveTab('explore')}>
                 <Text style={[styles.navText, activeTab === 'explore' && styles.activeText]}>EXPLORE</Text>
             </TouchableOpacity>
-
-            <View style={{width: 1, height: '50%', backgroundColor:'#ddd'}} />
-
-            <TouchableOpacity 
-                style={[styles.navBtn, activeTab === 'profile' && styles.activeNav]} 
-                onPress={() => setActiveTab('profile')}>
+            <View style={styles.divider} />
+            <TouchableOpacity style={styles.navBtn} onPress={() => setActiveTab('profile')}>
                 <Text style={[styles.navText, activeTab === 'profile' && styles.activeText]}>PROFILE</Text>
             </TouchableOpacity>
         </View>
@@ -496,57 +474,40 @@ const styles = StyleSheet.create({
   content: { flex: 1 },
   map: { width: '100%', height: '100%' },
   
-  // NAV BAR
-  navBar: { 
-    flexDirection: 'row', height: 80, backgroundColor: 'white', 
-    borderTopWidth: 1, borderColor: '#ddd', paddingBottom: 20, paddingTop: 10,
-    elevation: 20, justifyContent: 'space-evenly', alignItems: 'center'
-  },
+  navBar: { flexDirection: 'row', height: 80, backgroundColor: 'white', borderTopWidth: 1, borderColor: '#ddd', paddingBottom: 20, paddingTop: 10, elevation: 20, justifyContent: 'space-evenly', alignItems: 'center' },
   navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   navText: { fontWeight: 'bold', color: '#999', fontSize: 14 },
-  activeNav: {  },
   activeText: { color: 'black', fontSize: 16, borderBottomWidth: 2, borderColor: 'black' },
+  divider: { width: 1, height: '40%', backgroundColor: '#eee' },
 
-  // SEARCH HUD
   topHud: { position: 'absolute', top: 50, width: '100%', alignItems: 'center', zIndex: 10 },
-  searchBar: { 
-    flexDirection: 'row', width: '90%', backgroundColor: 'white', 
-    borderRadius: 10, padding: 5, elevation: 5, alignItems: 'center'
-  },
+  searchBar: { flexDirection: 'row', width: '90%', backgroundColor: 'white', borderRadius: 10, padding: 5, elevation: 5, alignItems: 'center' },
   searchInput: { flex: 1, paddingHorizontal: 15, height: 40 },
   searchBtn: { padding: 10, backgroundColor: '#eee', borderRadius: 8 },
 
-  // DROPDOWN
-  dropdown: {
-      position: 'absolute', top: 55, width: '90%', backgroundColor: 'white', 
-      borderRadius: 10, padding: 10, elevation: 10, zIndex: 20
-  },
+  dropdown: { position: 'absolute', top: 55, width: '90%', backgroundColor: 'white', borderRadius: 10, padding: 10, elevation: 10, zIndex: 20 },
   dropdownHeader: { fontWeight: 'bold', marginBottom: 5, color: '#666' },
   resultItem: { padding: 10, borderBottomWidth: 1, borderColor: '#eee' },
-  resultTextBold: { fontSize: 16, fontWeight: 'bold' },
-  resultSub: { fontSize: 12, color: '#666' },
   cancelSearch: { alignItems: 'center', padding: 10, marginTop: 5 },
 
-  // TARGET HUD
-  targetHud: {
-      position: 'absolute', bottom: 20, alignSelf: 'center', 
-      backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20
-  },
-  lootboxMarker: { backgroundColor: 'white', padding: 5, borderRadius: 10, borderWidth: 2, borderColor: 'gold' },
+  targetHud: { position: 'absolute', bottom: 20, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20 },
 
-  // PROFILE
   profileContainer: { flex: 1, padding: 20, paddingTop: 60 },
   headerTitle: { fontSize: 28, fontWeight: '900', marginBottom: 20, color: '#333' },
   statCard: { backgroundColor: 'black', padding: 20, borderRadius: 15, marginBottom: 20, alignItems: 'center' },
   cashLarge: { color: '#00ff00', fontSize: 36, fontWeight: 'bold' },
   subLabel: { color: '#666', fontSize: 12, letterSpacing: 2 },
+  collectBtn: { marginTop: 15, backgroundColor: 'gold', padding: 10, borderRadius: 5 },
+  
   section: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 15, elevation: 2 },
   sectionTitle: { fontSize: 14, fontWeight: 'bold', color: '#555', marginBottom: 10 },
-  targetName: { fontSize: 22, fontWeight: 'bold', color: '#000' },
-  targetStatus: { fontSize: 14, color: '#666', marginTop: 5 },
-  rowTextBold: { fontWeight: 'bold', fontSize: 16, marginBottom: 5 },
+  rowText: { fontSize: 16, marginBottom: 5, color: '#333' },
   simpleRow: { fontSize: 16, marginBottom: 5, color: '#333' },
-  emptyText: { fontStyle: 'italic', color: '#999' },
+  
+  shopItem: { backgroundColor: 'white', padding: 20, borderRadius: 10, marginBottom: 15, elevation: 2 },
+  shopTitle: { fontSize: 18, fontWeight: 'bold' },
+  shopCost: { color: 'green', fontWeight: 'bold', fontSize: 16, marginVertical: 5 },
+  shopDesc: { color: '#666', lineHeight: 20 },
 
   toast: { position: 'absolute', top: 120, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20 },
   toastText: { color: 'white', fontWeight: 'bold' },

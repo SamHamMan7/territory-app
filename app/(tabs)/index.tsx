@@ -1,16 +1,39 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import MapView, { Circle, Polygon, Polyline, Region } from 'react-native-maps';
+import { ActivityIndicator, Alert, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import MapView, { Circle, Marker, Polygon, Polyline, Region } from 'react-native-maps';
 
+const POLYGONS_KEY = 'territory_polygons_v6'; // Version up for new features
 
-const POLYGONS_KEY = 'territory_polygons_v1';
-
-// --- Small coord/type helpers ---
+// --- TYPES ---
 type Coord = { latitude: number; longitude: number };
+type TerritoryType = 'street' | 'landmark' | 'city' | 'unknown';
+type Territory = { 
+  coords: Coord[]; 
+  id: string;
+  name: string;
+  type: TerritoryType;
+  area: number;
+  level: number; 
+  date: string;
+};
 
-// --- MATH ENGINE ---
+// --- MATH HELPER ---
+const getDistance = (p1: Coord, p2: Coord) => {
+  const R = 6371e3; 
+  const phi1 = p1.latitude * Math.PI / 180;
+  const phi2 = p2.latitude * Math.PI / 180;
+  const deltaPhi = (p2.latitude - p1.latitude) * Math.PI / 180;
+  const deltaLambda = (p2.longitude - p1.longitude) * Math.PI / 180;
+  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; 
+};
+
+// Intersection for Loop Detection
 const getIntersection = (p1: Coord, p2: Coord, p3: Coord, p4: Coord): boolean => {
   const d1 = (p2.latitude - p1.latitude) * (p3.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p3.latitude - p1.latitude);
   const d2 = (p2.latitude - p1.latitude) * (p4.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p4.latitude - p1.latitude);
@@ -20,331 +43,511 @@ const getIntersection = (p1: Coord, p2: Coord, p3: Coord, p4: Coord): boolean =>
   return false;
 };
 
-// --- MISSIONS ---
-const MISSIONS = [
-  { name: "My Street", zoom: 0.002, label: "Street" },
-  { name: "My Neighborhood", zoom: 0.01, label: "Neighbor" },
-  { name: "My City", zoom: 0.05, label: "City" },
-];
+const getCentroid = (coords: Coord[]) => {
+  let lat = 0, lng = 0;
+  coords.forEach(p => { lat += p.latitude; lng += p.longitude; });
+  return { latitude: lat / coords.length, longitude: lng / coords.length };
+};
+
+// Calculate Polygon Area (approx m^2)
+const getPolygonArea = (coords: Coord[]) => {
+  let area = 0;
+  const n = coords.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area += coords[i].latitude * coords[j].longitude;
+    area -= coords[j].latitude * coords[i].longitude;
+  }
+  return Math.abs(area / 2) * 1.23e10; 
+};
 
 export default function App() {
   const mapRef = useRef<MapView | null>(null);
+  const [userLocation, setUserLocation] = useState<Coord | null>(null);
   const [path, setPath] = useState<Coord[]>([]);
-  const [polygons, setPolygons] = useState<{ coords: Coord[]; type: string }[]>([]);
+  const [polygons, setPolygons] = useState<Territory[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
 
-  //Target Search and Zone
+  // Economy & State
+  const [cash, setCash] = useState(100); 
+  const [activeTab, setActiveTab] = useState<'explore' | 'profile'>('explore');
+  const distanceTraveledRef = useRef(0); 
+
+  // Search & Target
   const [searchText, setSearchText] = useState("");
-  const [targetZone, setTargetZone] = useState<{ latitude: number; longitude: number; radius: number } | null>(null);
-
-  // Mission state
-  const [targetName, setTargetName] = useState<string>('Free Roam');
-  const [modalVisible, setModalVisible] = useState<boolean>(false);
-
-  // Toast for lightweight feedback (avoids blocking alerts)
+  const [searchResults, setSearchResults] = useState<any[]>([]); // For the dropdown
+  const [isSearching, setIsSearching] = useState(false);
+  const [targetZone, setTargetZone] = useState<{ latitude: number; longitude: number; radius: number, name: string } | null>(null);
+  
+  // Lootbox State
+  const [lootbox, setLootbox] = useState<{coord: Coord, amount: number} | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Helpers: close loop (ensure polygon closed) and area filter
-  const closeLoop = (pts: Coord[]) => {
-    if (pts.length === 0) return pts;
-    const first = pts[0];
-    const last = pts[pts.length - 1];
-    if (first.latitude !== last.latitude || first.longitude !== last.longitude) {
-      return [...pts, first];
-    }
-    return pts;
-  };
-
-  const polygonAreaDegrees = (pts: Coord[]) => {
-    let minLat = Infinity, minLng = Infinity, maxLat = -Infinity, maxLng = -Infinity;
-    for (const p of pts) {
-      minLat = Math.min(minLat, p.latitude);
-      minLng = Math.min(minLng, p.longitude);
-      maxLat = Math.max(maxLat, p.latitude);
-      maxLng = Math.max(maxLng, p.longitude);
-    }
-    return Math.abs((maxLat - minLat) * (maxLng - minLng));
-  };
-
+  // --- HELPERS ---
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(null), 2500);
+    setTimeout(() => setToast(null), 3000);
   };
 
-  // Load persisted polygons on mount
+  // --- PERSISTENCE ---
   useEffect(() => {
     const load = async () => {
       try {
         const raw = await AsyncStorage.getItem(POLYGONS_KEY);
-        if (raw) {
-          setPolygons(JSON.parse(raw));
-        }
-      } catch (e) {
-        console.warn('Failed to load polygons:', e);
-      }
+        if (raw) setPolygons(JSON.parse(raw));
+      } catch (e) { console.warn('Failed to load:', e); }
     };
     load();
   }, []);
 
-  // Persist polygons when they change (debounced simple write)
   useEffect(() => {
     const save = async () => {
-      try {
-        await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons));
-      } catch (e) {
-        console.warn('Failed to save polygons:', e);
-      }
+      try { await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons)); } 
+      catch (e) { console.warn('Failed to save:', e); }
     };
-
     const t = setTimeout(save, 500);
     return () => clearTimeout(t);
   }, [polygons]);
 
+  // --- THE GAME ENGINE ---
   useEffect(() => {
     let subscription: { remove: () => void } | null = null;
 
     const startTracking = async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Location required', 'Allow location access to capture territories.');
-        return;
-      }
+      if (status !== 'granted') return;
 
-      const location = await Location.getCurrentPositionAsync({});
+      const loc = await Location.getCurrentPositionAsync({});
+      setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
       setInitialRegion({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        latitudeDelta: 0.002,
-        longitudeDelta: 0.002,
+        latitude: loc.coords.latitude, longitude: loc.coords.longitude,
+        latitudeDelta: 0.005, longitudeDelta: 0.005,
       });
 
       subscription = await Location.watchPositionAsync({
-        accuracy: Location.Accuracy.High,
-        distanceInterval: 3,
-      }, (newLocation) => {
-        const newPoint: Coord = { latitude: newLocation.coords.latitude, longitude: newLocation.coords.longitude };
+        accuracy: Location.Accuracy.High, distanceInterval: 5,
+      }, async (newLoc) => {
+        const newPoint: Coord = { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude };
+        
+        // 1. LOOTBOX LOGIC (Every 50m)
+        if (userLocation) {
+            const step = getDistance(userLocation, newPoint);
+            distanceTraveledRef.current += step;
+            if (distanceTraveledRef.current > 50) {
+                distanceTraveledRef.current = 0;
+                // 5% Chance
+                if (Math.random() < 0.05) {
+                    setLootbox({ coord: newPoint, amount: Math.floor(Math.random() * 50) + 10 });
+                    Alert.alert("🎁 MYSTERY CRATE FOUND!", "You stumbled upon a hidden stash nearby!");
+                }
+            }
+        }
 
+        setUserLocation(newPoint);
+
+        // 2. CHECK LOOTBOX PICKUP
+        if (lootbox && getDistance(newPoint, lootbox.coord) < 20) {
+            setCash(c => c + lootbox.amount);
+            Alert.alert("💰 LOOT SECURED", `You found $${lootbox.amount}!`);
+            setLootbox(null);
+        }
+
+        // 3. PATH & LOOPS
         setPath((currentPath) => {
-          // Keep path from growing unbounded
-          if (currentPath.length > 1000) currentPath = currentPath.slice(-500);
+          if (currentPath.length > 400) currentPath = currentPath.slice(-200);
+          const updatedPath = [...currentPath, newPoint];
 
-          if (currentPath.length < 3) return [...currentPath, newPoint];
-          const lastPoint = currentPath[currentPath.length - 1];
+          if (updatedPath.length >= 4) {
+            const lastPoint = updatedPath[updatedPath.length - 1];
+            for (let i = Math.max(0, updatedPath.length - 50); i < updatedPath.length - 2; i++) {
+               const start = updatedPath[i];
+               const end = updatedPath[i + 1];
+               
+               if (getIntersection(lastPoint, newPoint, start, end)) {
+                 const loop = updatedPath.slice(i);
+                 const closed = [...loop, loop[0]]; 
+                 const area = getPolygonArea(closed);
 
-          // CHECK INTERSECTIONS (avoid checking last adjacent segments)
-          for (let i = 0; i < currentPath.length - 2; i++) {
-            const start = currentPath[i];
-            const end = currentPath[i + 1];
+                 if (area < 50) return updatedPath; 
 
-            if (getIntersection(lastPoint, newPoint, start, end)) {
-              const loop = currentPath.slice(i);
-              const closed = closeLoop(loop);
+                 // Identify Territory
+                 const center = getCentroid(closed);
+                 
+                 (async () => {
+                    let name = "Unknown Territory";
+                    let type: TerritoryType = 'street'; 
+                    let bonus = 0;
 
-              // Basic quality filter: require several points and a minimal area
-              if (closed.length >= 4 && polygonAreaDegrees(closed) > 1.0e-8) {
-                setPolygons(prev => [...prev, { coords: closed, type: targetName }]);
-                // lightweight feedback
-                showToast(`Captured: ${targetName}`);
-              } else {
-                // small loop — ignore
-                showToast('Capture too small');
-              }
+                    // A. Target Hit?
+                    if (targetZone && getDistance(center, targetZone) < targetZone.radius) {
+                        name = targetZone.name;
+                        type = 'landmark';
+                        bonus = 500;
+                        setTargetZone(null); 
+                        setSearchText("");
+                        Alert.alert("🎯 TARGET CONQUERED", `You captured ${name}!\nBonus: $500`);
+                    } else {
+                        // B. Reverse Geocode
+                        try {
+                            const [address] = await Location.reverseGeocodeAsync(center);
+                            if (address) {
+                                if (area > 20000) {
+                                    name = address.city || address.district || "City Sector";
+                                    type = 'city';
+                                    bonus = 100;
+                                } else {
+                                    name = address.street || address.name || "Unnamed Road";
+                                    type = 'street';
+                                    bonus = 20;
+                                }
+                            }
+                        } catch (e) { console.log("Geocode failed"); }
+                    }
 
-              // Reset path, keep only latest point to start new loop
-              return [newPoint];
+                    const newTerritory: Territory = {
+                        coords: closed,
+                        id: Date.now().toString(),
+                        name: name,
+                        type: type,
+                        area: Math.floor(area),
+                        level: 1,
+                        date: new Date().toLocaleDateString()
+                    };
+
+                    setPolygons(prev => [...prev, newTerritory]);
+                    setCash(c => c + 10 + bonus);
+                    showToast(`Captured: ${name} (+$${10 + bonus})`);
+                 })();
+
+                 return [newPoint]; 
+               }
             }
           }
-
-          return [...currentPath, newPoint];
+          return updatedPath;
         });
       });
     };
-
     startTracking();
+    return () => { if (subscription) subscription.remove(); };
+  }, [targetZone, lootbox, userLocation]); 
 
-    return () => {
-      if (subscription) subscription.remove();
-    };
-  }, [targetName]);
-
-  const selectMission = (mission: { name: string; zoom: number }) => {
-    setTargetName(mission.name);
-    setModalVisible(false);
-
-    if (mapRef.current && initialRegion) {
-      try {
-        mapRef.current.animateToRegion({
-          latitude: initialRegion.latitude,
-          longitude: initialRegion.longitude,
-          latitudeDelta: mission.zoom,
-          longitudeDelta: mission.zoom,
-        }, 1000);
-      } catch (e) {
-        console.warn('Unable to animate map:', e);
-      }
-    }
-  };
-
-  // Search helper: locate a named place and center map
-  const searchLocation = async () => {
+  // --- SMART SEARCH ENGINE ---
+  const performSearch = async () => {
     Keyboard.dismiss();
-    if (searchText.trim() === '') {
-      Alert.alert('Please enter a location to search.');
-      return;
-    }
-
+    if (!searchText.trim()) return;
+    
+    setIsSearching(true);
     try {
-      const geocode = await Location.geocodeAsync(searchText);
-      if (geocode.length === 0) {
-        Alert.alert('Location not found. Please try a different search term.');
+      // 1. Get raw results
+      const results = await Location.geocodeAsync(searchText);
+      
+      if (results.length === 0) {
+        Alert.alert("No Results", "Try a more specific name.");
+        setIsSearching(false);
         return;
       }
 
-      const location = geocode[0];
-      const region: Region = {
-        latitude: location.latitude,
-        longitude: location.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
+      // 2. ENRICH: Calculate distance to USER for each result
+      const enrichedResults = await Promise.all(results.map(async (res: any) => {
+          let dist = 999999;
+          let streetName = "Unknown Location";
 
-      setTargetZone({
-        latitude: location.latitude,
-        longitude: location.longitude,
-        radius: 200,
-      });
+          // Calculate distance if we know where user is
+          if (userLocation) {
+              dist = getDistance(userLocation, {latitude: res.latitude, longitude: res.longitude});
+          }
 
-      setInitialRegion(region);
-      if (mapRef.current) {
-        try { mapRef.current.animateToRegion(region, 1000); } catch (e) { /* ignore */ }
-      }
-    } catch (error) {
-      Alert.alert('Error searching location. Please try again.');
-      console.warn('Geocoding error:', error);
+          // Reverse Geocode to get a pretty name (e.g. "Main St")
+          try {
+              const [address] = await Location.reverseGeocodeAsync({latitude: res.latitude, longitude: res.longitude});
+              if (address) {
+                  streetName = address.name || address.street || address.city || "Location";
+              }
+          } catch(e) {}
+
+          return { ...res, dist, streetName };
+      }));
+
+      // 3. SORT: Closest first
+      enrichedResults.sort((a, b) => a.dist - b.dist);
+
+      // 4. Show top 5
+      setSearchResults(enrichedResults.slice(0, 5));
+      setIsSearching(false);
+
+    } catch (e) { 
+        Alert.alert('Error', 'Check internet.'); 
+        setIsSearching(false);
     }
   };
 
-  if (!initialRegion) {
-    return (
-      <View style={[styles.container, styles.loading]}>
-        <ActivityIndicator size="large" color="#0000ff" />
-      </View>
+  const selectSearchResult = (result: any) => {
+      const region = { latitude: result.latitude, longitude: result.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 };
+      
+      // Use the user's search text as the "Mission Name", but add the street
+      const missionName = `${searchText} (${result.streetName})`;
+      
+      setTargetZone({ latitude: result.latitude, longitude: result.longitude, radius: 150, name: missionName });
+      setInitialRegion(region);
+      mapRef.current?.animateToRegion(region, 1000);
+      setSearchResults([]); // Hide dropdown
+      showToast(`Target Set: ${Math.floor(result.dist)}m away`);
+  };
+
+  // --- UPGRADE ENGINE ---
+  const handleTerritoryPress = (index: number) => {
+    const t = polygons[index];
+    const cost = 100;
+    
+    Alert.alert(
+      t.name, 
+      `Level: ${t.level}\nArea: ${t.area}m²\n\nUpgrade for $${cost}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "UPGRADE ($100)", onPress: () => {
+            if (cash < cost) { Alert.alert("Not enough cash!"); return; }
+            if (t.level >= 2) { Alert.alert("Max Level!"); return; }
+            
+            setCash(c => c - cost);
+            const updated = [...polygons];
+            updated[index].level = 2;
+            setPolygons(updated);
+            showToast(`Upgraded ${t.name}!`);
+        }}
+      ]
     );
-  }
+  };
+
+  // --- RENDERERS ---
+  const renderMap = () => (
+    <View style={styles.fullScreen}>
+        <MapView
+            ref={mapRef}
+            style={styles.map}
+            initialRegion={initialRegion!}
+            showsUserLocation={true}
+            followsUserLocation={true}
+        >
+            {polygons.map((poly, index) => {
+                const isNeon = poly.level > 1;
+                let fill = isNeon ? "rgba(0,255,255,0.3)" : "rgba(255,215,0,0.2)"; 
+                let stroke = isNeon ? "cyan" : "orange";
+                if (poly.type === 'landmark') { fill = "rgba(255,0,255,0.3)"; stroke = "magenta"; }
+                
+                return (
+                <Polygon
+                    key={poly.id}
+                    coordinates={poly.coords}
+                    fillColor={fill}
+                    strokeColor={stroke}
+                    strokeWidth={2}
+                    tappable={true}
+                    onPress={() => handleTerritoryPress(index)}
+                />
+                );
+            })}
+            
+            <Polyline coordinates={path} strokeColor="red" strokeWidth={4} />
+
+            {/* DOTTED LINE TO TARGET */}
+            {targetZone && userLocation && (
+                <Polyline 
+                    coordinates={[userLocation, targetZone]} 
+                    strokeColor="lime" 
+                    strokeWidth={3} 
+                    lineDashPattern={[10, 10]} 
+                />
+            )}
+
+            {targetZone && (
+                <Circle center={targetZone} radius={targetZone.radius} fillColor="rgba(0,255,0,0.2)" strokeColor="lime" />
+            )}
+            
+            {lootbox && (
+                <Marker coordinate={lootbox.coord} title="MYSTERY CRATE">
+                    <View style={styles.lootboxMarker}><Text>🎁</Text></View>
+                </Marker>
+            )}
+
+        </MapView>
+
+        {/* SEARCH BAR */}
+        <View style={styles.topHud}>
+            <View style={styles.searchBar}>
+                <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search Target (e.g. McDonalds)"
+                    placeholderTextColor="#666"
+                    value={searchText}
+                    onChangeText={setSearchText}
+                    onSubmitEditing={performSearch}
+                />
+                <TouchableOpacity onPress={performSearch} style={styles.searchBtn}>
+                    {isSearching ? <ActivityIndicator color="black" size="small"/> : <Text>🔍</Text>}
+                </TouchableOpacity>
+            </View>
+
+            {/* SMART RESULTS DROPDOWN */}
+            {searchResults.length > 0 && (
+                <View style={styles.dropdown}>
+                    <Text style={styles.dropdownHeader}>Select Closest Match:</Text>
+                    {searchResults.map((res, i) => (
+                        <TouchableOpacity key={i} style={styles.resultItem} onPress={() => selectSearchResult(res)}>
+                            <Text style={styles.resultTextBold}>
+                                {searchText} ({i+1})
+                            </Text>
+                            <Text style={styles.resultSub}>
+                                {res.streetName} • {Math.floor(res.dist)}m away
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity style={styles.cancelSearch} onPress={() => setSearchResults([])}>
+                        <Text style={{color:'red'}}>Cancel</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+        </View>
+
+        {/* TARGET HUD */}
+        {targetZone && (
+             <View style={styles.targetHud}>
+                 <Text style={{color:'white', fontWeight:'bold'}}>TARGET: {targetZone.name}</Text>
+             </View>
+        )}
+
+        {toast && <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View>}
+    </View>
+  );
+
+  const renderProfile = () => {
+    const streets = polygons.filter(p => p.type === 'street');
+    const landmarks = polygons.filter(p => p.type === 'landmark');
+    
+    let distText = "No active target";
+    if (targetZone && userLocation) {
+        const d = Math.floor(getDistance(userLocation, targetZone));
+        distText = `${d} meters away`;
+    }
+
+    return (
+        <ScrollView style={styles.profileContainer}>
+            <Text style={styles.headerTitle}>Commander Profile</Text>
+            
+            <View style={styles.statCard}>
+                <Text style={styles.cashLarge}>${cash}</Text>
+                <Text style={styles.subLabel}>WAR CHEST</Text>
+            </View>
+
+            <View style={[styles.section, {borderColor: 'lime', borderWidth: 1}]}>
+                <Text style={[styles.sectionTitle, {color: 'green'}]}>CURRENT MISSION</Text>
+                <Text style={styles.targetName}>{targetZone ? targetZone.name : "None Set"}</Text>
+                <Text style={styles.targetStatus}>{targetZone ? `Distance: ${distText}` : "Search a place to set target"}</Text>
+            </View>
+
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>🏰 LANDMARKS ({landmarks.length})</Text>
+                {landmarks.map(p => (
+                    <Text key={p.id} style={styles.rowTextBold}>{p.name}</Text>
+                ))}
+                {landmarks.length === 0 && <Text style={styles.emptyText}>Capture highlighted targets.</Text>}
+            </View>
+
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>🛣️ STREETS ({streets.length})</Text>
+                {streets.map(p => (
+                    <Text key={p.id} style={styles.simpleRow}>{p.name} {p.level > 1 ? "⭐" : ""}</Text>
+                ))}
+            </View>
+
+            <View style={{height: 100}} /> 
+        </ScrollView>
+    );
+  };
 
   return (
     <View style={styles.container}>
-      <MapView
-        ref={(r) => { mapRef.current = r; }}
-        style={styles.map}
-        initialRegion={initialRegion}
-        showsUserLocation={true}
-        followsUserLocation={true}
-      >
-        {polygons.map((poly, index) => (
-          <Polygon
-            key={index}
-            coordinates={poly.coords}
-            fillColor={poly.type === "My City" ? "rgba(255, 0, 0, 0.2)" : "rgba(0, 255, 0, 0.3)"}
-            strokeColor="rgba(0, 255, 0, 0.8)"
-          />
-        ))}
-
-        <Polyline coordinates={path} strokeColor="red" strokeWidth={5} />
-
-        {/* Target Zone Circle */}
-        {targetZone && (
-          <Circle
-            center={{ latitude: targetZone.latitude, longitude: targetZone.longitude }}
-            radius={targetZone.radius}
-            strokeColor="rgba(0, 0, 255, 0.3)"
-            fillColor="rgba(0, 0, 255, 0.1)"
-            strokeWidth={2}
-          />
-        )}
-      </MapView>
-
-      <View style = {styles.searchContainer}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search location..."
-          placeholderTextColor="#667"
-          value={searchText}
-          onChangeText={setSearchText}
-          onSubmitEditing={searchLocation}
-          returnKeyType="search"
-        />
-      </View>
-
-      {toast ? (
-        <View style={styles.toast} pointerEvents="none">
-          <Text style={styles.toastText}>{toast}</Text>
+        <View style={styles.content}>
+            {activeTab === 'explore' && renderMap()}
+            {activeTab === 'profile' && renderProfile()}
         </View>
-      ) : null}
 
-      <TouchableOpacity style={styles.missionBtn} onPress={() => setModalVisible(true)}>
-        <Text style={styles.missionText}>🎯 Target: {targetName}</Text>
-      </TouchableOpacity>
-
-      <View style={styles.hud}>
-        <Text style={styles.text}>Territories: {polygons.length}</Text>
-      </View>
-
-      <Modal visible={modalVisible} transparent animationType="slide">
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Choose Your Target</Text>
-            {MISSIONS.map((m, i) => (
-              <TouchableOpacity key={i} style={styles.optionBtn} onPress={() => selectMission(m)}>
-                <Text style={styles.optionText}>{m.name}</Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.closeBtn} onPress={() => setModalVisible(false)}>
-              <Text style={{color: 'red'}}>Cancel</Text>
+        <View style={styles.navBar}>
+            <TouchableOpacity 
+                style={[styles.navBtn, activeTab === 'explore' && styles.activeNav]} 
+                onPress={() => setActiveTab('explore')}>
+                <Text style={[styles.navText, activeTab === 'explore' && styles.activeText]}>EXPLORE</Text>
             </TouchableOpacity>
-          </View>
+
+            <View style={{width: 1, height: '50%', backgroundColor:'#ddd'}} />
+
+            <TouchableOpacity 
+                style={[styles.navBtn, activeTab === 'profile' && styles.activeNav]} 
+                onPress={() => setActiveTab('profile')}>
+                <Text style={[styles.navText, activeTab === 'profile' && styles.activeText]}>PROFILE</Text>
+            </TouchableOpacity>
         </View>
-      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: '#f2f2f2' },
+  fullScreen: { flex: 1 },
+  content: { flex: 1 },
   map: { width: '100%', height: '100%' },
-  hud: { position: 'absolute', bottom: 50, left: 20, backgroundColor: 'rgba(0,0,0,0.6)', padding: 10, borderRadius: 8 },
-  text: { color: 'white', fontWeight: 'bold' },
-  loading: { justifyContent: 'center', alignItems: 'center' },
-
-  // toast
-  toast: { position: 'absolute', top: Platform.OS === 'ios' ? 50 : 30, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 20, zIndex: 999, elevation: 6 },
-  toastText: { color: 'white', fontWeight: '600' },
-
-  missionBtn: { position: 'absolute', top: 90, alignSelf: 'center', backgroundColor: 'white', padding: 15, borderRadius: 30, elevation: 5, shadowColor: '#000', shadowOffset: {width:0, height:2}, shadowOpacity:0.3 },
-  missionText: { fontWeight: 'bold', fontSize: 16 },
-
-  modalContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
-  modalContent: { width: 300, backgroundColor: 'white', padding: 20, borderRadius: 20, alignItems: 'center' },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
-  optionBtn: { width: '100%', padding: 15, borderBottomWidth: 1, borderColor: '#eee', alignItems: 'center' },
-  optionText: { fontSize: 18 },
-  closeBtn: { marginTop: 20, padding: 10 },
-
-  searchContainer: {
-    position: 'absolute',
-    top: 14,
-    width: '90%',
-    alignSelf: 'center',
-    backgroundColor: 'white',
-    borderRadius: 8,
-    padding: 5,
-    elevation: 5,
-    zIndex: 10
+  
+  // NAV BAR
+  navBar: { 
+    flexDirection: 'row', height: 80, backgroundColor: 'white', 
+    borderTopWidth: 1, borderColor: '#ddd', paddingBottom: 20, paddingTop: 10,
+    elevation: 20, justifyContent: 'space-evenly', alignItems: 'center'
   },
-  searchInput: {
-    height: 40,
-    paddingHorizontal: 10,
-    fontSize: 16,
-    color: '#000'
-  }
+  navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  navText: { fontWeight: 'bold', color: '#999', fontSize: 14 },
+  activeNav: {  },
+  activeText: { color: 'black', fontSize: 16, borderBottomWidth: 2, borderColor: 'black' },
+
+  // SEARCH HUD
+  topHud: { position: 'absolute', top: 50, width: '100%', alignItems: 'center', zIndex: 10 },
+  searchBar: { 
+    flexDirection: 'row', width: '90%', backgroundColor: 'white', 
+    borderRadius: 10, padding: 5, elevation: 5, alignItems: 'center'
+  },
+  searchInput: { flex: 1, paddingHorizontal: 15, height: 40 },
+  searchBtn: { padding: 10, backgroundColor: '#eee', borderRadius: 8 },
+
+  // DROPDOWN
+  dropdown: {
+      position: 'absolute', top: 55, width: '90%', backgroundColor: 'white', 
+      borderRadius: 10, padding: 10, elevation: 10, zIndex: 20
+  },
+  dropdownHeader: { fontWeight: 'bold', marginBottom: 5, color: '#666' },
+  resultItem: { padding: 10, borderBottomWidth: 1, borderColor: '#eee' },
+  resultTextBold: { fontSize: 16, fontWeight: 'bold' },
+  resultSub: { fontSize: 12, color: '#666' },
+  cancelSearch: { alignItems: 'center', padding: 10, marginTop: 5 },
+
+  // TARGET HUD
+  targetHud: {
+      position: 'absolute', bottom: 20, alignSelf: 'center', 
+      backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20
+  },
+  lootboxMarker: { backgroundColor: 'white', padding: 5, borderRadius: 10, borderWidth: 2, borderColor: 'gold' },
+
+  // PROFILE
+  profileContainer: { flex: 1, padding: 20, paddingTop: 60 },
+  headerTitle: { fontSize: 28, fontWeight: '900', marginBottom: 20, color: '#333' },
+  statCard: { backgroundColor: 'black', padding: 20, borderRadius: 15, marginBottom: 20, alignItems: 'center' },
+  cashLarge: { color: '#00ff00', fontSize: 36, fontWeight: 'bold' },
+  subLabel: { color: '#666', fontSize: 12, letterSpacing: 2 },
+  section: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 15, elevation: 2 },
+  sectionTitle: { fontSize: 14, fontWeight: 'bold', color: '#555', marginBottom: 10 },
+  targetName: { fontSize: 22, fontWeight: 'bold', color: '#000' },
+  targetStatus: { fontSize: 14, color: '#666', marginTop: 5 },
+  rowTextBold: { fontWeight: 'bold', fontSize: 16, marginBottom: 5 },
+  simpleRow: { fontSize: 16, marginBottom: 5, color: '#333' },
+  emptyText: { fontStyle: 'italic', color: '#999' },
+
+  toast: { position: 'absolute', top: 120, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20 },
+  toastText: { color: 'white', fontWeight: 'bold' },
 });

@@ -1,54 +1,47 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import MapView, { Circle, Polygon, Polyline, Region } from 'react-native-maps';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import MapView, { Polygon, Polyline, Region } from 'react-native-maps';
 
-const POLYGONS_KEY = 'territory_polygons_v8'; // Tycoon Update
+const POLYGONS_KEY = 'paperio_polygons_v1';
+const USER_COLOR_KEY = 'paperio_user_color';
+const USER_ID_KEY = 'paperio_user_id';
 
 // --- TYPES ---
 type Coord = { latitude: number; longitude: number };
-type TerritoryType = 'street' | 'landmark' | 'city' | 'unknown';
-type BuildingType = 'none' | 'factory' | 'bunker';
 
-type Territory = { 
-  coords: Coord[]; 
+type Territory = {
   id: string;
-  name: string;
-  type: TerritoryType;
+  ownerId: string;
+  color: string;
+  coords: Coord[];
   area: number;
-  level: number; 
-  building: BuildingType; // NEW: What is built here?
   date: string;
 };
 
-// --- MATH HELPER ---
+// --- MATH HELPERS ---
 const getDistance = (p1: Coord, p2: Coord) => {
-  const R = 6371e3; 
+  const R = 6371e3;
   const phi1 = p1.latitude * Math.PI / 180;
   const phi2 = p2.latitude * Math.PI / 180;
   const deltaPhi = (p2.latitude - p1.latitude) * Math.PI / 180;
   const deltaLambda = (p2.longitude - p1.longitude) * Math.PI / 180;
   const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-            Math.cos(phi1) * Math.cos(phi2) *
-            Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+    Math.cos(phi1) * Math.cos(phi2) *
+    Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c; 
+  return R * c;
 };
 
+// Returns true if line segment p1-p2 intersects with p3-p4
 const getIntersection = (p1: Coord, p2: Coord, p3: Coord, p4: Coord): boolean => {
   const d1 = (p2.latitude - p1.latitude) * (p3.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p3.latitude - p1.latitude);
   const d2 = (p2.latitude - p1.latitude) * (p4.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p4.latitude - p1.latitude);
   const d3 = (p4.latitude - p3.latitude) * (p1.longitude - p3.longitude) - (p4.longitude - p3.longitude) * (p1.latitude - p3.latitude);
   const d4 = (p4.latitude - p3.latitude) * (p2.longitude - p3.longitude) - (p4.longitude - p3.longitude) * (p2.latitude - p3.latitude);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true; 
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
   return false;
-};
-
-const getCentroid = (coords: Coord[]) => {
-  let lat = 0, lng = 0;
-  coords.forEach(p => { lat += p.latitude; lng += p.longitude; });
-  return { latitude: lat / coords.length, longitude: lng / coords.length };
 };
 
 const getPolygonArea = (coords: Coord[]) => {
@@ -59,8 +52,24 @@ const getPolygonArea = (coords: Coord[]) => {
     area += coords[i].latitude * coords[j].longitude;
     area -= coords[j].latitude * coords[i].longitude;
   }
-  return Math.abs(area / 2) * 1.23e10; 
+  return Math.abs(area / 2) * 1.23e10;
 };
+
+const hexToRgba = (hex: string, alpha: number) => {
+  let c: string[] | string;
+  if (/^#([A-Fa-f0-9]{3}){1,2}$/.test(hex)) {
+    c = hex.substring(1).split('');
+    if (c.length === 3) {
+      c = [c[0], c[0], c[1], c[1], c[2], c[2]];
+    }
+    c = '0x' + c.join('');
+    const numC = parseInt(c, 16);
+    return 'rgba(' + [(numC >> 16) & 255, (numC >> 8) & 255, numC & 255].join(',') + ',' + alpha + ')';
+  }
+  return `rgba(255,255,255,${alpha})`;
+}
+
+const PASTEL_COLORS = ['#ff4d4d', '#ffaf40', '#ffeaa7', '#55efc4', '#74b9ff', '#a29bfe', '#fd79a8'];
 
 export default function App() {
   const mapRef = useRef<MapView | null>(null);
@@ -69,16 +78,9 @@ export default function App() {
   const [polygons, setPolygons] = useState<Territory[]>([]);
   const [initialRegion, setInitialRegion] = useState<Region | null>(null);
 
-  // Economy
-  const [cash, setCash] = useState(500); // Start rich for testing
-  const [lastCollected, setLastCollected] = useState(Date.now());
-  const [activeTab, setActiveTab] = useState<'shop' | 'explore' | 'profile'>('explore');
+  const [userId, setUserId] = useState<string>('');
+  const [userColor, setUserColor] = useState<string>('#ffffff');
 
-  // Search
-  const [searchText, setSearchText] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]); 
-  const [isSearching, setIsSearching] = useState(false);
-  const [targetZone, setTargetZone] = useState<{ latitude: number; longitude: number; radius: number, name: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -86,15 +88,31 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // --- INIT USER ---
+  useEffect(() => {
+    const initUser = async () => {
+      let storedId = await AsyncStorage.getItem(USER_ID_KEY);
+      let storedColor = await AsyncStorage.getItem(USER_COLOR_KEY);
+
+      if (!storedId) {
+        storedId = `player_${Math.floor(Math.random() * 100000)}`;
+        storedColor = PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)];
+        await AsyncStorage.setItem(USER_ID_KEY, storedId);
+        await AsyncStorage.setItem(USER_COLOR_KEY, storedColor);
+      }
+
+      setUserId(storedId);
+      setUserColor(storedColor!);
+    };
+    initUser();
+  }, []);
+
   // --- PERSISTENCE ---
   useEffect(() => {
     const load = async () => {
       try {
         const raw = await AsyncStorage.getItem(POLYGONS_KEY);
         if (raw) setPolygons(JSON.parse(raw));
-        
-        const time = await AsyncStorage.getItem('last_collected');
-        if (time) setLastCollected(parseInt(time));
       } catch (e) { console.warn('Failed to load:', e); }
     };
     load();
@@ -102,79 +120,67 @@ export default function App() {
 
   useEffect(() => {
     const save = async () => {
-      try { 
-          await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons));
-          await AsyncStorage.setItem('last_collected', lastCollected.toString());
-      } catch (e) {}
+      try {
+        await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons));
+      } catch (e) { }
     };
     const t = setTimeout(save, 500);
     return () => clearTimeout(t);
-  }, [polygons, lastCollected]);
+  }, [polygons]);
 
-  // --- GAME ENGINE ---
+  // --- GAME ENGINE: MOVEMENT & LOOP DETECTION ---
   useEffect(() => {
+    if (!userId) return;
+
     let subscription: { remove: () => void } | null = null;
     const startTracking = async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      
+
       const loc = await Location.getCurrentPositionAsync({});
       setUserLocation(loc.coords);
       setInitialRegion({ latitude: loc.coords.latitude, longitude: loc.coords.longitude, latitudeDelta: 0.005, longitudeDelta: 0.005 });
 
-      subscription = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 4 }, async (newLoc) => {
+      subscription = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 3 }, async (newLoc) => {
         const newPoint = { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude };
         setUserLocation(newPoint);
 
         setPath((curr) => {
-          if (curr.length > 400) curr = curr.slice(-200);
+          if (curr.length > 500) curr = curr.slice(-250);
           const updated = [...curr, newPoint];
 
-          // Loop Detection
+          // Loop Detection algorithm
           if (updated.length >= 4) {
-            const last = updated[updated.length - 1];
-            for (let i = Math.max(0, updated.length - 50); i < updated.length - 2; i++) {
-               if (getIntersection(last, newPoint, updated[i], updated[i + 1])) {
-                 const loop = updated.slice(i);
-                 const closed = [...loop, loop[0]]; 
-                 const area = getPolygonArea(closed);
+            // Check the newly formed segment against all older segments
+            const p1 = updated[updated.length - 2];
+            const p2 = updated[updated.length - 1];
 
-                 // Lowered threshold to 20sqm so you can test it easily!
-                 if (area < 20) return updated; 
+            // Don't test against the segment immediately before the current one (they share p1)
+            for (let i = 0; i < updated.length - 3; i++) {
+              const p3 = updated[i];
+              const p4 = updated[i + 1];
 
-                 const center = getCentroid(closed);
-                 (async () => {
-                    let name = "Unknown Land";
-                    let type: TerritoryType = 'street'; 
-                    let bonus = 0;
+              if (getIntersection(p1, p2, p3, p4)) {
+                const loop = updated.slice(i);
+                const closed = [...loop, loop[0]];
+                const area = getPolygonArea(closed);
 
-                    if (targetZone && getDistance(center, targetZone) < targetZone.radius) {
-                        name = targetZone.name;
-                        type = 'landmark';
-                        bonus = 500;
-                        setTargetZone(null); setSearchText("");
-                        Alert.alert("🎯 TARGET CONQUERED", `You captured ${name}!\nBonus: $500`);
-                    } else {
-                        try {
-                            const [addr] = await Location.reverseGeocodeAsync(center);
-                            if (addr) {
-                                if (area > 20000) { name = addr.district || "Sector"; type = 'city'; bonus = 100; } 
-                                else { name = addr.name || addr.street || "Road"; type = 'street'; bonus = 20; }
-                            }
-                        } catch (e) {}
-                    }
+                // Require a minimum 20 sqm area to avoid noise
+                if (area < 20) return updated;
 
-                    const newT: Territory = {
-                        coords: closed, id: Date.now().toString(), name, type, 
-                        area: Math.floor(area), level: 1, building: 'none', 
-                        date: new Date().toLocaleDateString()
-                    };
-                    setPolygons(p => [...p, newT]);
-                    setCash(c => c + 10 + bonus);
-                    showToast(`Captured: ${name}`);
-                 })();
-                 return [newPoint]; 
-               }
+                const newT: Territory = {
+                  id: Date.now().toString(),
+                  ownerId: userId,
+                  color: userColor,
+                  coords: closed,
+                  area: Math.floor(area),
+                  date: new Date().toLocaleDateString()
+                };
+
+                setPolygons(p => [...p, newT]);
+                showToast(`Captured Land! +${Math.floor(area)} sqm`);
+                return [newPoint]; // Start new path
+              }
             }
           }
           return updated;
@@ -183,332 +189,124 @@ export default function App() {
     };
     startTracking();
     return () => { if (subscription) subscription.remove(); };
-  }, [targetZone]); 
+  }, [userId, userColor]);
 
-  // --- SMART SEARCH (With Auto-Correction) ---
-  const performSearch = async () => {
-    Keyboard.dismiss();
-    if (!searchText.trim()) return;
-    setIsSearching(true);
+  // --- BOT SIMULATION ---
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!userLocation) return;
 
-    const doSearch = async (query: string) => {
-        const results = await Location.geocodeAsync(query);
-        if (results.length > 0) return results;
-        return [];
-    };
+      // 30% chance to spawn a bot territory nearby every 10 seconds
+      if (Math.random() < 0.3) {
+        const angle = Math.random() * Math.PI * 2;
+        const dist = 30 + Math.random() * 100; // 30-130 meters away
 
-    try {
-      // 1. Try exact search
-      let results = await doSearch(searchText);
+        // Map meters to degrees roughly
+        const dLat = (dist * Math.cos(angle)) / 111320;
+        const dLng = (dist * Math.sin(angle)) / (40075000 * Math.cos(userLocation.latitude * Math.PI / 180) / 360);
 
-      // 2. If failed, try appending current city (Smart Retry)
-      if (results.length === 0 && userLocation) {
-          const [addr] = await Location.reverseGeocodeAsync(userLocation);
-          if (addr && addr.city) {
-              const smartQuery = `${searchText} ${addr.city}`;
-              console.log("Smart Retry:", smartQuery);
-              results = await doSearch(smartQuery);
-          }
+        const center = { latitude: userLocation.latitude + dLat, longitude: userLocation.longitude + dLng };
+        const radius = 10 + Math.random() * 20;
+
+        // Generate circle polygon coords
+        const botCoords = [];
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          const rLat = (radius * Math.cos(a)) / 111320;
+          const rLng = (radius * Math.sin(a)) / (40075000 * Math.cos(center.latitude * Math.PI / 180) / 360);
+          botCoords.push({ latitude: center.latitude + rLat, longitude: center.longitude + rLng });
+        }
+        botCoords.push(botCoords[0]);
+
+        const botColor = PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)];
+
+        const botT: Territory = {
+          id: `bot_${Date.now()}`,
+          ownerId: `bot_${Math.floor(Math.random() * 1000)}`,
+          color: botColor,
+          coords: botCoords,
+          area: Math.floor(Math.PI * radius * radius),
+          date: new Date().toLocaleDateString()
+        };
+        setPolygons(p => [...p, botT]);
       }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [userLocation]);
 
-      if (results.length === 0) {
-        Alert.alert("Not Found", "Try adding a city name (e.g., 'McDonalds Houston')");
-        setIsSearching(false);
-        return;
-      }
-
-      // 3. Process & Sort Results
-      const enriched = await Promise.all(results.map(async (res: any) => {
-          let dist = userLocation ? getDistance(userLocation, {latitude: res.latitude, longitude: res.longitude}) : 0;
-          let label = "Location";
-          try {
-              const [a] = await Location.reverseGeocodeAsync({latitude: res.latitude, longitude: res.longitude});
-              if (a) label = a.name || a.street || a.city || "Point";
-          } catch(e) {}
-          return { ...res, dist, label };
-      }));
-
-      enriched.sort((a, b) => a.dist - b.dist);
-      setSearchResults(enriched.slice(0, 5)); // Show top 5
-      setIsSearching(false);
-
-    } catch (e) { 
-        Alert.alert('Error', 'Search failed. Check internet.'); 
-        setIsSearching(false);
-    }
-  };
-
-  const selectSearchResult = (result: any) => {
-      const region = { latitude: result.latitude, longitude: result.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 };
-      const missionName = `${searchText} (${result.label})`;
-      setTargetZone({ latitude: result.latitude, longitude: result.longitude, radius: 150, name: missionName });
-      setInitialRegion(region);
-      mapRef.current?.animateToRegion(region, 1000);
-      setSearchResults([]); 
-      showToast(`Target Set! ${Math.floor(result.dist)}m away`);
-  };
-
-  // --- BUILD & UPGRADE SYSTEM ---
-  const handleTerritoryPress = (index: number) => {
-    const t = polygons[index];
-    
-    Alert.alert(
-      t.name, 
-      `Type: ${t.type.toUpperCase()}\nBuilding: ${t.building.toUpperCase() || "None"}`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: "Build Factory ($300)", onPress: () => buildStructure(index, 'factory', 300) },
-        { text: "Upgrade Land ($100)", onPress: () => buildStructure(index, 'upgrade', 100) }
-      ]
-    );
-  };
-
-  const buildStructure = (index: number, type: 'factory' | 'upgrade', cost: number) => {
-      if (cash < cost) { Alert.alert("Insufficient Funds"); return; }
-      
-      const updated = [...polygons];
-      const t = updated[index];
-
-      if (type === 'factory') {
-          if (t.building !== 'none') { Alert.alert("Occupied", "Already has a building!"); return; }
-          t.building = 'factory';
-          showToast("Factory Built! 🏭");
-      } else {
-          if (t.level >= 2) { Alert.alert("Max Level"); return; }
-          t.level = 2;
-          showToast("Land Upgraded! ⭐");
-      }
-
-      setCash(c => c - cost);
-      setPolygons(updated);
-  };
-
-  // --- INCOME COLLECTION ---
-  const collectIncome = () => {
-      const now = Date.now();
-      const minsPassed = (now - lastCollected) / 60000;
-      
-      if (minsPassed < 1) {
-          Alert.alert("Chill!", "Production in progress. Check back later.");
-          return;
-      }
-
-      // LOGIC: Factories make money based on nearby CITIES
-      // Base: $10 per factory.
-      // Bonus: +$5 for every City territory you own.
-      const factories = polygons.filter(p => p.building === 'factory').length;
-      const cities = polygons.filter(p => p.type === 'city').length;
-      
-      if (factories === 0) {
-          Alert.alert("No Industry", "Build factories on your land to earn passive income.");
-          return;
-      }
-
-      const incomePerFactory = 10 + (cities * 5);
-      const totalIncome = Math.floor(factories * incomePerFactory * minsPassed); // Scale by time
-
-      // Cap at 24 hours to prevent overflow logic
-      const payout = Math.min(totalIncome, factories * 5000);
-
-      setCash(c => c + payout);
-      setLastCollected(now);
-      Alert.alert("💰 PAYDAY", `Factories produced $${payout}!\n(Based on ${cities} Cities owned)`);
-  };
-
-  // --- RENDERERS ---
-  const renderMap = () => (
-    <View style={styles.fullScreen}>
-        <MapView
-            ref={mapRef}
-            style={styles.map}
-            initialRegion={initialRegion!}
-            showsUserLocation={true}
-            followsUserLocation={true}
-        >
-            {polygons.map((poly, index) => {
-                let fill = "rgba(255,215,0,0.2)"; 
-                let stroke = "orange";
-                if (poly.level > 1) { fill = "rgba(0,255,255,0.3)"; stroke = "cyan"; }
-                if (poly.building === 'factory') { fill = "rgba(100,100,100,0.6)"; stroke = "black"; }
-
-                return (
-                <Polygon
-                    key={poly.id}
-                    coordinates={poly.coords}
-                    fillColor={fill}
-                    strokeColor={stroke}
-                    strokeWidth={2}
-                    tappable={true}
-                    onPress={() => handleTerritoryPress(index)}
-                />
-                );
-            })}
-            
-            <Polyline coordinates={path} strokeColor="red" strokeWidth={4} />
-
-            {targetZone && userLocation && (
-                <Polyline coordinates={[userLocation, targetZone]} strokeColor="lime" strokeWidth={3} lineDashPattern={[10, 10]} />
-            )}
-            {targetZone && <Circle center={targetZone} radius={targetZone.radius} fillColor="rgba(0,255,0,0.2)" strokeColor="lime" />}
-        </MapView>
-
-        {/* SEARCH HUD */}
-        <View style={styles.topHud}>
-            <View style={styles.searchBar}>
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search Target (e.g. McDonalds)"
-                    placeholderTextColor="#666"
-                    value={searchText}
-                    onChangeText={setSearchText}
-                    onSubmitEditing={performSearch}
-                />
-                <TouchableOpacity onPress={performSearch} style={styles.searchBtn}>
-                    {isSearching ? <ActivityIndicator size="small" color="black"/> : <Text>🔍</Text>}
-                </TouchableOpacity>
-            </View>
-
-            {searchResults.length > 0 && (
-                <View style={styles.dropdown}>
-                    <Text style={styles.dropdownHeader}>Select Target:</Text>
-                    {searchResults.map((res, i) => (
-                        <TouchableOpacity key={i} style={styles.resultItem} onPress={() => selectSearchResult(res)}>
-                            <Text style={{fontWeight:'bold'}}>{res.label}</Text>
-                            <Text style={{fontSize:12, color:'#666'}}>{Math.floor(res.dist)}m away</Text>
-                        </TouchableOpacity>
-                    ))}
-                    <TouchableOpacity style={styles.cancelSearch} onPress={() => setSearchResults([])}><Text style={{color:'red'}}>Close</Text></TouchableOpacity>
-                </View>
-            )}
-        </View>
-
-        {targetZone && <View style={styles.targetHud}><Text style={{color:'white', fontWeight:'bold'}}>TARGET: {targetZone.name}</Text></View>}
-        {toast && <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View>}
-    </View>
-  );
-
-  const renderProfile = () => {
-    const factories = polygons.filter(p => p.building === 'factory').length;
-    const cities = polygons.filter(p => p.type === 'city').length;
-    
-    return (
-        <ScrollView style={styles.profileContainer}>
-            <Text style={styles.headerTitle}>Tycoon Profile</Text>
-            
-            <View style={styles.statCard}>
-                <Text style={styles.cashLarge}>${cash}</Text>
-                <Text style={styles.subLabel}>NET WORTH</Text>
-                <TouchableOpacity style={styles.collectBtn} onPress={collectIncome}>
-                    <Text style={{fontWeight:'bold'}}>COLLECT FACTORY INCOME</Text>
-                </TouchableOpacity>
-            </View>
-
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>🏭 INDUSTRY</Text>
-                <Text style={styles.simpleRow}>Factories Owned: {factories}</Text>
-                <Text style={styles.simpleRow}>Cities Connected: {cities}</Text>
-                <Text style={{color:'green', marginTop:5}}>Current Rate: ${factories * (10 + cities*5)} / min</Text>
-            </View>
-
-            <View style={styles.section}>
-                <Text style={styles.sectionTitle}>🗺️ TERRITORIES ({polygons.length})</Text>
-                {polygons.map(p => (
-                    <Text key={p.id} style={styles.rowText}>
-                        {p.name} {p.building === 'factory' ? "🏭" : ""} {p.level > 1 ? "⭐" : ""}
-                    </Text>
-                ))}
-            </View>
-            <View style={{height: 100}} /> 
-        </ScrollView>
-    );
-  };
-
-  const renderShop = () => (
-    <View style={styles.profileContainer}>
-        <Text style={styles.headerTitle}>Asset Management</Text>
-        <Text style={{textAlign:'center', marginBottom:20}}>Cash Available: ${cash}</Text>
-        
-        <View style={styles.shopItem}>
-            <Text style={styles.shopTitle}>🏭 Industrial Factory</Text>
-            <Text style={styles.shopCost}>Cost: $300</Text>
-            <Text style={styles.shopDesc}>Generates passive income. Bonus cash if you own nearby Cities.</Text>
-            <Text style={{fontStyle:'italic', marginTop:5}}>How to build: Tap a territory on the Explore map.</Text>
-        </View>
-
-        <View style={styles.shopItem}>
-            <Text style={styles.shopTitle}>⭐ Urban Upgrade</Text>
-            <Text style={styles.shopCost}>Cost: $100</Text>
-            <Text style={styles.shopDesc}>Increases the value of a territory.</Text>
-        </View>
-    </View>
-  );
+  // Total Area Calculation
+  const totalMyArea = useMemo(() => {
+    return polygons.filter(p => p.ownerId === userId).reduce((sum, p) => sum + p.area, 0);
+  }, [polygons, userId]);
 
   return (
     <View style={styles.container}>
-        <View style={styles.content}>
-            {activeTab === 'explore' && renderMap()}
-            {activeTab === 'profile' && renderProfile()}
-            {activeTab === 'shop' && renderShop()}
-        </View>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        initialRegion={initialRegion!}
+        showsUserLocation={true}
+        followsUserLocation={true}
+        customMapStyle={darkMapStyle}
+      >
+        {/* Draw previously captured territories. Since they are drawn in order, newer territories cover older ones automatically. */}
+        {polygons.map((poly) => {
+          return (
+            <Polygon
+              key={poly.id}
+              coordinates={poly.coords}
+              fillColor={hexToRgba(poly.color, 0.4)}
+              strokeColor={poly.color}
+              strokeWidth={2}
+            />
+          );
+        })}
 
-        <View style={styles.navBar}>
-            <TouchableOpacity style={styles.navBtn} onPress={() => setActiveTab('shop')}>
-                <Text style={[styles.navText, activeTab === 'shop' && styles.activeText]}>ASSETS</Text>
-            </TouchableOpacity>
-            <View style={styles.divider} />
-            <TouchableOpacity style={styles.navBtn} onPress={() => setActiveTab('explore')}>
-                <Text style={[styles.navText, activeTab === 'explore' && styles.activeText]}>EXPLORE</Text>
-            </TouchableOpacity>
-            <View style={styles.divider} />
-            <TouchableOpacity style={styles.navBtn} onPress={() => setActiveTab('profile')}>
-                <Text style={[styles.navText, activeTab === 'profile' && styles.activeText]}>PROFILE</Text>
-            </TouchableOpacity>
+        {/* Draw current tracking path */}
+        <Polyline coordinates={path} strokeColor={userColor} strokeWidth={4} />
+      </MapView>
+
+      {/* HUD */}
+      <View style={styles.topHud}>
+        <View style={[styles.hudCard, { borderColor: userColor, borderLeftWidth: 4 }]}>
+          <Text style={styles.hudTitle}>DOMINION SCORE</Text>
+          <Text style={styles.hudStat}>{totalMyArea.toLocaleString()} sqm</Text>
         </View>
+      </View>
+
+      {toast && <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View>}
     </View>
   );
 }
 
+const darkMapStyle = [
+  { "elementType": "geometry", "stylers": [{ "color": "#111111" }] },
+  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
+  { "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#111111" }] },
+  { "featureType": "administrative", "elementType": "geometry", "stylers": [{ "color": "#757575" }] },
+  { "featureType": "administrative.country", "elementType": "labels.text.fill", "stylers": [{ "color": "#9e9e9e" }] },
+  { "featureType": "administrative.land_parcel", "stylers": [{ "visibility": "off" }] },
+  { "featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{ "color": "#bdbdbd" }] },
+  { "featureType": "poi", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
+  { "featureType": "poi.park", "elementType": "geometry", "stylers": [{ "color": "#181818" }] },
+  { "featureType": "road", "elementType": "geometry.fill", "stylers": [{ "color": "#222222" }] },
+  { "featureType": "road", "elementType": "labels.text.fill", "stylers": [{ "color": "#8a8a8a" }] },
+  { "featureType": "road.arterial", "elementType": "geometry", "stylers": [{ "color": "#333333" }] },
+  { "featureType": "road.highway", "elementType": "geometry", "stylers": [{ "color": "#3c3c3c" }] },
+  { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#000000" }] },
+  { "featureType": "water", "elementType": "labels.text.fill", "stylers": [{ "color": "#3d3d3d" }] }
+];
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f2f2f2' },
-  fullScreen: { flex: 1 },
-  content: { flex: 1 },
+  container: { flex: 1, backgroundColor: '#000' },
   map: { width: '100%', height: '100%' },
-  
-  navBar: { flexDirection: 'row', height: 80, backgroundColor: 'white', borderTopWidth: 1, borderColor: '#ddd', paddingBottom: 20, paddingTop: 10, elevation: 20, justifyContent: 'space-evenly', alignItems: 'center' },
-  navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navText: { fontWeight: 'bold', color: '#999', fontSize: 14 },
-  activeText: { color: 'black', fontSize: 16, borderBottomWidth: 2, borderColor: 'black' },
-  divider: { width: 1, height: '40%', backgroundColor: '#eee' },
 
-  topHud: { position: 'absolute', top: 50, width: '100%', alignItems: 'center', zIndex: 10 },
-  searchBar: { flexDirection: 'row', width: '90%', backgroundColor: 'white', borderRadius: 10, padding: 5, elevation: 5, alignItems: 'center' },
-  searchInput: { flex: 1, paddingHorizontal: 15, height: 40 },
-  searchBtn: { padding: 10, backgroundColor: '#eee', borderRadius: 8 },
+  topHud: { position: 'absolute', top: 50, left: 20, zIndex: 10 },
+  hudCard: { backgroundColor: 'rgba(10,10,10,0.8)', padding: 15, borderRadius: 8, minWidth: 150 },
+  hudTitle: { color: '#888', fontSize: 10, fontWeight: 'bold', letterSpacing: 1, marginBottom: 5 },
+  hudStat: { color: 'white', fontSize: 18, fontWeight: 'bold' },
 
-  dropdown: { position: 'absolute', top: 55, width: '90%', backgroundColor: 'white', borderRadius: 10, padding: 10, elevation: 10, zIndex: 20 },
-  dropdownHeader: { fontWeight: 'bold', marginBottom: 5, color: '#666' },
-  resultItem: { padding: 10, borderBottomWidth: 1, borderColor: '#eee' },
-  cancelSearch: { alignItems: 'center', padding: 10, marginTop: 5 },
-
-  targetHud: { position: 'absolute', bottom: 20, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20 },
-
-  profileContainer: { flex: 1, padding: 20, paddingTop: 60 },
-  headerTitle: { fontSize: 28, fontWeight: '900', marginBottom: 20, color: '#333' },
-  statCard: { backgroundColor: 'black', padding: 20, borderRadius: 15, marginBottom: 20, alignItems: 'center' },
-  cashLarge: { color: '#00ff00', fontSize: 36, fontWeight: 'bold' },
-  subLabel: { color: '#666', fontSize: 12, letterSpacing: 2 },
-  collectBtn: { marginTop: 15, backgroundColor: 'gold', padding: 10, borderRadius: 5 },
-  
-  section: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 15, elevation: 2 },
-  sectionTitle: { fontSize: 14, fontWeight: 'bold', color: '#555', marginBottom: 10 },
-  rowText: { fontSize: 16, marginBottom: 5, color: '#333' },
-  simpleRow: { fontSize: 16, marginBottom: 5, color: '#333' },
-  
-  shopItem: { backgroundColor: 'white', padding: 20, borderRadius: 10, marginBottom: 15, elevation: 2 },
-  shopTitle: { fontSize: 18, fontWeight: 'bold' },
-  shopCost: { color: 'green', fontWeight: 'bold', fontSize: 16, marginVertical: 5 },
-  shopDesc: { color: '#666', lineHeight: 20 },
-
-  toast: { position: 'absolute', top: 120, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', padding: 10, borderRadius: 20 },
+  toast: { position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, borderColor: '#333', borderWidth: 1 },
   toastText: { color: 'white', fontWeight: 'bold' },
 });

@@ -144,6 +144,7 @@ export default function App() {
       subscription = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 3 }, async (newLoc) => {
         const newPoint = { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude };
         setUserLocation(newPoint);
+        mapRef.current?.animateCamera({ center: newPoint }, { duration: 1000 });
 
         setPath((curr) => {
           if (curr.length > 500) curr = curr.slice(-250);
@@ -246,8 +247,9 @@ export default function App() {
         style={styles.map}
         initialRegion={initialRegion!}
         showsUserLocation={true}
-        followsUserLocation={true}
         customMapStyle={darkMapStyle}
+        pitchEnabled={false}
+        rotateEnabled={false}
       >
         {/* Draw previously captured territories. Since they are drawn in order, newer territories cover older ones automatically. */}
         {polygons.map((poly) => {
@@ -258,12 +260,14 @@ export default function App() {
               fillColor={hexToRgba(poly.color, 0.4)}
               strokeColor={poly.color}
               strokeWidth={2}
+              lineCap="round"
+              lineJoin="round"
             />
           );
         })}
 
         {/* Draw current tracking path */}
-        <Polyline coordinates={path} strokeColor={userColor} strokeWidth={4} />
+        <Polyline coordinates={path} strokeColor={userColor} strokeWidth={4} lineCap="round" lineJoin="round" />
       </MapView>
 
       {/* HUD */}
@@ -303,10 +307,10 @@ const styles = StyleSheet.create({
   map: { width: '100%', height: '100%' },
 
   topHud: { position: 'absolute', top: 50, left: 20, zIndex: 10 },
-  hudCard: { backgroundColor: 'rgba(10,10,10,0.8)', padding: 15, borderRadius: 8, minWidth: 150 },
-  hudTitle: { color: '#888', fontSize: 10, fontWeight: 'bold', letterSpacing: 1, marginBottom: 5 },
-  hudStat: { color: 'white', fontSize: 18, fontWeight: 'bold' },
+  hudCard: { backgroundColor: 'rgba(10,10,10,0.85)', padding: 15, borderRadius: 12, minWidth: 150, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 5, elevation: 5 },
+  hudTitle: { color: '#aaa', fontSize: 11, fontWeight: 'bold', letterSpacing: 1.5, marginBottom: 5 },
+  hudStat: { color: 'white', fontSize: 20, fontWeight: '800' },
 
-  toast: { position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, borderColor: '#333', borderWidth: 1 },
-  toastText: { color: 'white', fontWeight: 'bold' },
+  toast: { position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(20,20,20,0.9)', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 12, borderColor: '#444', borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 6, elevation: 6 },
+  toastText: { color: 'white', fontWeight: '600', fontSize: 16 },
 });

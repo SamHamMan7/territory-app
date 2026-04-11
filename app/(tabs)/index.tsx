@@ -3,6 +3,7 @@ import * as Location from 'expo-location';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import MapView, { Polygon, Polyline, Region } from 'react-native-maps';
+import { hexToRgba } from '@/utils/colors';
 
 const POLYGONS_KEY = 'paperio_polygons_v1';
 const USER_COLOR_KEY = 'paperio_user_color';
@@ -54,20 +55,6 @@ const getPolygonArea = (coords: Coord[]) => {
   }
   return Math.abs(area / 2) * 1.23e10;
 };
-
-const hexToRgba = (hex: string, alpha: number) => {
-  let c: string[] | string;
-  if (/^#([A-Fa-f0-9]{3}){1,2}$/.test(hex)) {
-    c = hex.substring(1).split('');
-    if (c.length === 3) {
-      c = [c[0], c[0], c[1], c[1], c[2], c[2]];
-    }
-    c = '0x' + c.join('');
-    const numC = parseInt(c, 16);
-    return 'rgba(' + [(numC >> 16) & 255, (numC >> 8) & 255, numC & 255].join(',') + ',' + alpha + ')';
-  }
-  return `rgba(255,255,255,${alpha})`;
-}
 
 const PASTEL_COLORS = ['#ff4d4d', '#ffaf40', '#ffeaa7', '#55efc4', '#74b9ff', '#a29bfe', '#fd79a8'];
 

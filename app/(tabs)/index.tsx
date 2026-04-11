@@ -122,7 +122,9 @@ export default function App() {
     const save = async () => {
       try {
         await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons));
-      } catch (e) { }
+      } catch (e) {
+        console.error('Failed to save polygons:', e);
+      }
     };
     const t = setTimeout(save, 500);
     return () => clearTimeout(t);

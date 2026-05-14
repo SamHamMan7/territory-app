@@ -95,7 +95,7 @@ export default function App() {
       let storedColor = await AsyncStorage.getItem(USER_COLOR_KEY);
 
       if (!storedId) {
-        storedId = `player_${Math.floor(Math.random() * 100000)}`;
+        storedId = `player_${crypto.randomUUID()}`;
         storedColor = PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)];
         await AsyncStorage.setItem(USER_ID_KEY, storedId);
         await AsyncStorage.setItem(USER_COLOR_KEY, storedColor);
@@ -170,7 +170,7 @@ export default function App() {
                 if (area < 20) return updated;
 
                 const newT: Territory = {
-                  id: Date.now().toString(),
+                  id: crypto.randomUUID(),
                   ownerId: userId,
                   color: userColor,
                   coords: closed,
@@ -222,8 +222,8 @@ export default function App() {
         const botColor = PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)];
 
         const botT: Territory = {
-          id: `bot_${Date.now()}`,
-          ownerId: `bot_${Math.floor(Math.random() * 1000)}`,
+          id: `bot_${crypto.randomUUID()}`,
+          ownerId: `bot_${crypto.randomUUID()}`,
           color: botColor,
           coords: botCoords,
           area: Math.floor(Math.PI * radius * radius),

@@ -237,7 +237,7 @@ export default function App() {
 
   // Total Area Calculation
   const totalMyArea = useMemo(() => {
-    return polygons.filter(p => p.ownerId === userId).reduce((sum, p) => sum + p.area, 0);
+    return polygons.reduce((sum, p) => (p.ownerId === userId ? sum + p.area : sum), 0);
   }, [polygons, userId]);
 
   return (

@@ -1,312 +1,317 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import MapView, { Polygon, Polyline, Region } from 'react-native-maps';
+import React, { useMemo, useState } from 'react';
+import {
+  ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const POLYGONS_KEY = 'paperio_polygons_v1';
-const USER_COLOR_KEY = 'paperio_user_color';
-const USER_ID_KEY = 'paperio_user_id';
+import { GameMap, camera } from '@/components/map/GameMap';
+import { lapProgress, nextTier, tierFor } from '@/game/badges';
+import { CONFIG } from '@/game/config';
+import { ownerAt } from '@/game/engine';
+import { distance } from '@/game/geo';
+import { Place, SearchResult, searchPlaces } from '@/game/places';
+import { MapMode, actions, fmtArea, leaderboard, myStatus, nearbyPlaces, useGame } from '@/game/store';
 
-// --- TYPES ---
-type Coord = { latitude: number; longitude: number };
+const C = { bg: 'rgba(14,17,24,0.92)', line: '#262c3a', text: '#eef2ff', dim: '#8a93a8', accent: '#00f0ff' };
 
-type Territory = {
-  id: string;
-  ownerId: string;
-  color: string;
-  coords: Coord[];
-  area: number;
-  date: string;
-};
-
-// --- MATH HELPERS ---
-const getDistance = (p1: Coord, p2: Coord) => {
-  const R = 6371e3;
-  const phi1 = p1.latitude * Math.PI / 180;
-  const phi2 = p2.latitude * Math.PI / 180;
-  const deltaPhi = (p2.latitude - p1.latitude) * Math.PI / 180;
-  const deltaLambda = (p2.longitude - p1.longitude) * Math.PI / 180;
-  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-    Math.cos(phi1) * Math.cos(phi2) *
-    Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
-
-// Returns true if line segment p1-p2 intersects with p3-p4
-const getIntersection = (p1: Coord, p2: Coord, p3: Coord, p4: Coord): boolean => {
-  const d1 = (p2.latitude - p1.latitude) * (p3.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p3.latitude - p1.latitude);
-  const d2 = (p2.latitude - p1.latitude) * (p4.longitude - p1.longitude) - (p2.longitude - p1.longitude) * (p4.latitude - p1.latitude);
-  const d3 = (p4.latitude - p3.latitude) * (p1.longitude - p3.longitude) - (p4.longitude - p3.longitude) * (p1.latitude - p3.latitude);
-  const d4 = (p4.latitude - p3.latitude) * (p2.longitude - p3.longitude) - (p4.longitude - p3.longitude) * (p2.latitude - p3.latitude);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
-  return false;
-};
-
-const getPolygonArea = (coords: Coord[]) => {
-  let area = 0;
-  const n = coords.length;
-  for (let i = 0; i < n; i++) {
-    const j = (i + 1) % n;
-    area += coords[i].latitude * coords[j].longitude;
-    area -= coords[j].latitude * coords[i].longitude;
-  }
-  return Math.abs(area / 2) * 1.23e10;
-};
-
-const hexToRgba = (hex: string, alpha: number) => {
-  let c: string[] | string;
-  if (/^#([A-Fa-f0-9]{3}){1,2}$/.test(hex)) {
-    c = hex.substring(1).split('');
-    if (c.length === 3) {
-      c = [c[0], c[0], c[1], c[1], c[2], c[2]];
-    }
-    c = '0x' + c.join('');
-    const numC = parseInt(c, 16);
-    return 'rgba(' + [(numC >> 16) & 255, (numC >> 8) & 255, numC & 255].join(',') + ',' + alpha + ')';
-  }
-  return `rgba(255,255,255,${alpha})`;
-}
-
-const PASTEL_COLORS = ['#ff4d4d', '#ffaf40', '#ffeaa7', '#55efc4', '#74b9ff', '#a29bfe', '#fd79a8'];
-
-export default function App() {
-  const mapRef = useRef<MapView | null>(null);
-  const [userLocation, setUserLocation] = useState<Coord | null>(null);
-  const [path, setPath] = useState<Coord[]>([]);
-  const [polygons, setPolygons] = useState<Territory[]>([]);
-  const [initialRegion, setInitialRegion] = useState<Region | null>(null);
-
-  const [userId, setUserId] = useState<string>('');
-  const [userColor, setUserColor] = useState<string>('#ffffff');
-
-  const [toast, setToast] = useState<string | null>(null);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3000);
-  };
-
-  // --- INIT USER ---
-  useEffect(() => {
-    const initUser = async () => {
-      let storedId = await AsyncStorage.getItem(USER_ID_KEY);
-      let storedColor = await AsyncStorage.getItem(USER_COLOR_KEY);
-
-      if (!storedId) {
-        storedId = `player_${Math.floor(Math.random() * 100000)}`;
-        storedColor = PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)];
-        await AsyncStorage.setItem(USER_ID_KEY, storedId);
-        await AsyncStorage.setItem(USER_COLOR_KEY, storedColor);
-      }
-
-      setUserId(storedId);
-      setUserColor(storedColor!);
-    };
-    initUser();
-  }, []);
-
-  // --- PERSISTENCE ---
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const raw = await AsyncStorage.getItem(POLYGONS_KEY);
-        if (raw) setPolygons(JSON.parse(raw));
-      } catch (e) { console.warn('Failed to load:', e); }
-    };
-    load();
-  }, []);
-
-  useEffect(() => {
-    const save = async () => {
-      try {
-        await AsyncStorage.setItem(POLYGONS_KEY, JSON.stringify(polygons));
-      } catch (e) { }
-    };
-    const t = setTimeout(save, 500);
-    return () => clearTimeout(t);
-  }, [polygons]);
-
-  // --- GAME ENGINE: MOVEMENT & LOOP DETECTION ---
-  useEffect(() => {
-    if (!userId) return;
-
-    let subscription: { remove: () => void } | null = null;
-    const startTracking = async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-
-      const loc = await Location.getCurrentPositionAsync({});
-      setUserLocation(loc.coords);
-      setInitialRegion({ latitude: loc.coords.latitude, longitude: loc.coords.longitude, latitudeDelta: 0.005, longitudeDelta: 0.005 });
-
-      subscription = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 3 }, async (newLoc) => {
-        const newPoint = { latitude: newLoc.coords.latitude, longitude: newLoc.coords.longitude };
-        setUserLocation(newPoint);
-
-        setPath((curr) => {
-          if (curr.length > 500) curr = curr.slice(-250);
-          const updated = [...curr, newPoint];
-
-          // Loop Detection algorithm
-          if (updated.length >= 4) {
-            // Check the newly formed segment against all older segments
-            const p1 = updated[updated.length - 2];
-            const p2 = updated[updated.length - 1];
-
-            // Don't test against the segment immediately before the current one (they share p1)
-            for (let i = 0; i < updated.length - 3; i++) {
-              const p3 = updated[i];
-              const p4 = updated[i + 1];
-
-              if (getIntersection(p1, p2, p3, p4)) {
-                const loop = updated.slice(i);
-                const closed = [...loop, loop[0]];
-                const area = getPolygonArea(closed);
-
-                // Require a minimum 20 sqm area to avoid noise
-                if (area < 20) return updated;
-
-                const newT: Territory = {
-                  id: Date.now().toString(),
-                  ownerId: userId,
-                  color: userColor,
-                  coords: closed,
-                  area: Math.floor(area),
-                  date: new Date().toLocaleDateString()
-                };
-
-                setPolygons(p => [...p, newT]);
-                showToast(`Captured Land! +${Math.floor(area)} sqm`);
-                return [newPoint]; // Start new path
-              }
-            }
-          }
-          return updated;
-        });
-      });
-    };
-    startTracking();
-    return () => { if (subscription) subscription.remove(); };
-  }, [userId, userColor]);
-
-  // --- BOT SIMULATION ---
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!userLocation) return;
-
-      // 30% chance to spawn a bot territory nearby every 10 seconds
-      if (Math.random() < 0.3) {
-        const angle = Math.random() * Math.PI * 2;
-        const dist = 30 + Math.random() * 100; // 30-130 meters away
-
-        // Map meters to degrees roughly
-        const dLat = (dist * Math.cos(angle)) / 111320;
-        const dLng = (dist * Math.sin(angle)) / (40075000 * Math.cos(userLocation.latitude * Math.PI / 180) / 360);
-
-        const center = { latitude: userLocation.latitude + dLat, longitude: userLocation.longitude + dLng };
-        const radius = 10 + Math.random() * 20;
-
-        // Generate circle polygon coords
-        const botCoords = [];
-        for (let i = 0; i < 8; i++) {
-          const a = (i / 8) * Math.PI * 2;
-          const rLat = (radius * Math.cos(a)) / 111320;
-          const rLng = (radius * Math.sin(a)) / (40075000 * Math.cos(center.latitude * Math.PI / 180) / 360);
-          botCoords.push({ latitude: center.latitude + rLat, longitude: center.longitude + rLng });
-        }
-        botCoords.push(botCoords[0]);
-
-        const botColor = PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)];
-
-        const botT: Territory = {
-          id: `bot_${Date.now()}`,
-          ownerId: `bot_${Math.floor(Math.random() * 1000)}`,
-          color: botColor,
-          coords: botCoords,
-          area: Math.floor(Math.PI * radius * radius),
-          date: new Date().toLocaleDateString()
-        };
-        setPolygons(p => [...p, botT]);
-      }
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [userLocation]);
-
-  // Total Area Calculation
-  const totalMyArea = useMemo(() => {
-    return polygons.filter(p => p.ownerId === userId).reduce((sum, p) => sum + p.area, 0);
-  }, [polygons, userId]);
+export default function MapScreen() {
+  const insets = useSafeAreaInsets();
+  const [placesOpen, setPlacesOpen] = useState(false);
+  const s = useGame((x) => x); // whole state; new object on every game tick
+  const status = myStatus(s);
+  const board = leaderboard(s);
+  const myRank = board.findIndex((b) => b.isMe) + 1;
+  const myArea = board.find((b) => b.isMe)?.area ?? 0;
 
   return (
-    <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        initialRegion={initialRegion!}
-        showsUserLocation={true}
-        followsUserLocation={true}
-        customMapStyle={darkMapStyle}
-      >
-        {/* Draw previously captured territories. Since they are drawn in order, newer territories cover older ones automatically. */}
-        {polygons.map((poly) => {
-          return (
-            <Polygon
-              key={poly.id}
-              coordinates={poly.coords}
-              fillColor={hexToRgba(poly.color, 0.4)}
-              strokeColor={poly.color}
-              strokeWidth={2}
-            />
-          );
-        })}
+    <View style={styles.root}>
+      <GameMap />
 
-        {/* Draw current tracking path */}
-        <Polyline coordinates={path} strokeColor={userColor} strokeWidth={4} />
-      </MapView>
-
-      {/* HUD */}
-      <View style={styles.topHud}>
-        <View style={[styles.hudCard, { borderColor: userColor, borderLeftWidth: 4 }]}>
-          <Text style={styles.hudTitle}>DOMINION SCORE</Text>
-          <Text style={styles.hudStat}>{totalMyArea.toLocaleString()} sqm</Text>
+      {/* Status + feed */}
+      <View style={[styles.top, { top: insets.top + 8 }]} pointerEvents="box-none">
+        <StatusPill />
+        <View style={{ gap: 6, marginTop: 8 }} pointerEvents="none">
+          {s.feed.map((f) => (
+            <View key={f.id} style={[styles.toast, toneStyle[f.tone]]}>
+              <Text style={styles.toastText}>{f.text}</Text>
+            </View>
+          ))}
         </View>
       </View>
 
-      {toast && <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View>}
+      {/* Map mode + recenter */}
+      <View style={[styles.side, { top: insets.top + 8 }]}>
+        <ModeButton mode="street" icon="🗺️" label="Street" />
+        <ModeButton mode="gods" icon="🛰️" label="God's Eye" />
+        <ModeButton mode="tilt" icon="🏙️" label="3D" />
+        {!s.follow && (
+          <Pressable style={[styles.sideBtn, { marginTop: 10 }]} onPress={() => { camera.recenter(); actions.setFollow(true); }}>
+            <Text style={styles.sideIcon}>🎯</Text>
+          </Pressable>
+        )}
+      </View>
+
+      {s.target && (
+        <Pressable style={[styles.targetPill, { top: insets.top + 60 }]} onPress={() => actions.setTarget(null)}>
+          <Text style={styles.targetText}>
+            {s.target.emoji} {s.target.name}
+            {status?.hasPos ? ` · ${Math.round(distance(s.world.players[s.meId].pos!, [s.target.lng, s.target.lat]))} m` : ''}  ✕
+          </Text>
+        </Pressable>
+      )}
+
+      {/* Bottom HUD */}
+      <View style={[styles.bottom, { bottom: 12 }]} pointerEvents="box-none">
+        {s.sim.on && (
+          <View style={styles.simBar}>
+            <Text style={styles.simText}>🧪 Tap map to walk</Text>
+            {[1, 4, 10].map((t) => (
+              <Pressable key={t} onPress={() => actions.setTurbo(t)} style={[styles.chip, s.sim.turbo === t && styles.chipOn]}>
+                <Text style={[styles.chipText, s.sim.turbo === t && { color: '#000' }]}>{t}×</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+        <SelectedPlaceCard />
+        <View style={styles.hud}>
+          <View style={[styles.swatch, { backgroundColor: status?.color ?? '#555' }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hudLabel}>YOUR LAND</Text>
+            <Text style={styles.hudValue}>{fmtArea(myArea)}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end', marginRight: 12 }}>
+            <Text style={styles.hudLabel}>RANK</Text>
+            <Text style={styles.hudValue}>#{myRank || '-'}<Text style={styles.hudDim}>/{board.length}</Text></Text>
+          </View>
+          <Pressable style={styles.hudBtn} onPress={() => setPlacesOpen(true)}>
+            <Text style={styles.hudBtnText}>📍</Text>
+          </Pressable>
+          <Pressable style={[styles.hudBtn, s.sim.on && { backgroundColor: '#ffd23f' }]} onPress={actions.toggleSim}>
+            <Text style={styles.hudBtnText}>🧪</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <PlacesSheet visible={placesOpen} onClose={() => setPlacesOpen(false)} />
     </View>
   );
 }
 
-const darkMapStyle = [
-  { "elementType": "geometry", "stylers": [{ "color": "#111111" }] },
-  { "elementType": "labels.icon", "stylers": [{ "visibility": "off" }] },
-  { "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
-  { "elementType": "labels.text.stroke", "stylers": [{ "color": "#111111" }] },
-  { "featureType": "administrative", "elementType": "geometry", "stylers": [{ "color": "#757575" }] },
-  { "featureType": "administrative.country", "elementType": "labels.text.fill", "stylers": [{ "color": "#9e9e9e" }] },
-  { "featureType": "administrative.land_parcel", "stylers": [{ "visibility": "off" }] },
-  { "featureType": "administrative.locality", "elementType": "labels.text.fill", "stylers": [{ "color": "#bdbdbd" }] },
-  { "featureType": "poi", "elementType": "labels.text.fill", "stylers": [{ "color": "#757575" }] },
-  { "featureType": "poi.park", "elementType": "geometry", "stylers": [{ "color": "#181818" }] },
-  { "featureType": "road", "elementType": "geometry.fill", "stylers": [{ "color": "#222222" }] },
-  { "featureType": "road", "elementType": "labels.text.fill", "stylers": [{ "color": "#8a8a8a" }] },
-  { "featureType": "road.arterial", "elementType": "geometry", "stylers": [{ "color": "#333333" }] },
-  { "featureType": "road.highway", "elementType": "geometry", "stylers": [{ "color": "#3c3c3c" }] },
-  { "featureType": "water", "elementType": "geometry", "stylers": [{ "color": "#000000" }] },
-  { "featureType": "water", "elementType": "labels.text.fill", "stylers": [{ "color": "#3d3d3d" }] }
-];
+function StatusPill() {
+  const s = useGame((x) => x);
+  const st = myStatus(s);
+  let text = 'Waiting for GPS…';
+  let dot = '#8a93a8';
+  if (s.gps.status === 'denied' && !s.sim.on) { text = 'Location denied — enable it, or use 🧪 sim'; dot = '#ff5c7a'; }
+  else if (s.sim.on && !st?.hasPos) { text = 'Sim: tap the map to drop in'; dot = '#ffd23f'; }
+  else if (st?.hasPos) {
+    const kmh = (st.speed * 3.6).toFixed(1);
+    if (st.tooFast) { text = `🚗 Too fast (${kmh} km/h) — slow to a walk`; dot = '#ff5c7a'; }
+    else if (st.trailM > 0) { text = `✏️ Drawing · ${Math.round(st.trailM)} m · get back to your land!`; dot = st.color; }
+    else if (st.inside) { text = `🏠 In your land · walk out to draw`; dot = '#7cff6b'; }
+    else { text = `🚶 ${kmh} km/h`; dot = '#7cff6b'; }
+  }
+  return (
+    <View style={styles.pill}>
+      <View style={[styles.dot, { backgroundColor: dot }]} />
+      <Text style={styles.pillText} numberOfLines={1}>{text}</Text>
+      {s.gps.accuracy != null && !s.sim.on && <Text style={styles.pillDim}>±{Math.round(s.gps.accuracy)}m</Text>}
+    </View>
+  );
+}
+
+function ModeButton({ mode, icon, label }: { mode: MapMode; icon: string; label: string }) {
+  const cur = useGame((s) => s.mode);
+  const on = cur === mode;
+  return (
+    <Pressable onPress={() => actions.setMode(mode)} style={[styles.sideBtn, on && styles.sideBtnOn]} accessibilityLabel={label}>
+      <Text style={styles.sideIcon}>{icon}</Text>
+      <Text style={[styles.sideLabel, on && { color: '#000' }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function SelectedPlaceCard() {
+  const s = useGame((x) => x);
+  const place = s.selectedPlaceId ? s.places[s.selectedPlaceId] : null;
+  if (!place) return null;
+  const badge = s.badges.places[place.id];
+  const laps = badge?.laps ?? 0;
+  const tier = tierFor(laps);
+  const next = nextTier(laps);
+  const holder = ownerAt(s.world, [place.lng, place.lat]);
+  const prog = lapProgress(s.badges, place.id);
+  const me = s.world.players[s.meId];
+  const d = me?.pos ? distance(me.pos, [place.lng, place.lat]) : null;
+  return (
+    <View style={styles.card}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Text style={{ fontSize: 30, marginRight: 10 }}>{place.emoji}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.cardTitle} numberOfLines={1}>{place.name}</Text>
+          <Text style={styles.cardSub}>
+            {place.category.replace(/_/g, ' ')}{d != null ? ` · ${Math.round(d)} m away` : ''}
+          </Text>
+        </View>
+        <Pressable onPress={() => actions.selectPlace(null)} hitSlop={12}><Text style={{ color: C.dim, fontSize: 18 }}>✕</Text></Pressable>
+      </View>
+      <View style={styles.cardRow}>
+        <Text style={[styles.tier, { color: tier?.color ?? C.dim }]}>{tier ? `🏅 ${tier.name}` : 'No badge yet'}</Text>
+        <Text style={styles.cardSub}>{laps} {laps === 1 ? 'lap' : 'laps'}{next ? ` · ${next.laps - laps} to ${next.name}` : ' · maxed!'}</Text>
+      </View>
+      {prog > 0 && (
+        <View style={styles.bar}><View style={[styles.barFill, { width: `${prog * 100}%` }]} /></View>
+      )}
+      <Text style={styles.cardSub}>
+        {holder ? `👑 Held by ${holder.id === s.meId ? 'you' : holder.name}` : 'Unclaimed — encircle it to hold it'}
+        {'  ·  '}Walk all the way around (within {CONFIG.LAP_MAX_RADIUS_M} m) for a lap
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+        <Pressable style={styles.btn} onPress={() => { actions.setTarget(place); actions.selectPlace(null); }}>
+          <Text style={styles.btnText}>🎯 Set target</Text>
+        </Pressable>
+        {s.sim.on && (
+          <Pressable style={[styles.btn, { backgroundColor: '#2b2410' }]} onPress={() => actions.simLap(place)}>
+            <Text style={[styles.btnText, { color: '#ffd23f' }]}>🧪 Sim a lap</Text>
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function PlacesSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const s = useGame((x) => x);
+  const nearby = useMemo(() => (visible ? nearbyPlaces(s, 80) : []), [s, visible]);
+
+  async function run() {
+    if (!q.trim()) { setResults(null); return; }
+    setBusy(true); setErr(null);
+    try {
+      const me = s.world.players[s.meId];
+      setResults(await searchPlaces(q.trim(), me?.pos ? { lng: me.pos[0], lat: me.pos[1] } : null));
+    } catch (e: any) { setErr(e.message ?? 'Search failed'); }
+    setBusy(false);
+  }
+
+  function pick(p: Place) {
+    actions.addPlace(p);
+    actions.setTarget(p);
+    actions.selectPlace(p.id);
+    camera.flyTo(p.lng, p.lat);
+    onClose();
+  }
+
+  const me = s.world.players[s.meId];
+  const list: (Place & { dist?: number; address?: string })[] = results ?? nearby;
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheetWrap}>
+        <Pressable style={{ flex: 1 }} onPress={onClose} />
+        <View style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]}>
+          <View style={styles.grabber} />
+          <View style={styles.search}>
+            <TextInput
+              value={q} onChangeText={setQ} onSubmitEditing={run} returnKeyType="search"
+              placeholder="Search places (e.g. McDonald's)" placeholderTextColor={C.dim} style={styles.searchInput}
+            />
+            {busy ? <ActivityIndicator color={C.accent} /> : (
+              <Pressable onPress={run} hitSlop={10}><Text style={{ fontSize: 18 }}>🔍</Text></Pressable>
+            )}
+          </View>
+          {err && <Text style={{ color: '#ff8fa3', marginBottom: 8 }}>{err}</Text>}
+          <Text style={styles.sheetHeader}>{results ? 'Search results' : 'Nearby places'}</Text>
+          <FlatList
+            data={list}
+            keyExtractor={(p) => p.id}
+            style={{ maxHeight: 420 }}
+            ListEmptyComponent={<Text style={styles.cardSub}>{results ? 'Nothing found.' : 'Places appear as the map loads around you.'}</Text>}
+            renderItem={({ item }) => {
+              const b = s.badges.places[item.id];
+              const tier = b ? tierFor(b.laps) : null;
+              const dist = item.dist ?? (me?.pos ? distance(me.pos, [item.lng, item.lat]) : null);
+              return (
+                <Pressable style={styles.row} onPress={() => pick(item)}>
+                  <Text style={{ fontSize: 22, width: 34 }}>{item.emoji}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>{item.name}</Text>
+                    <Text style={styles.cardSub} numberOfLines={1}>
+                      {item.address || item.category.replace(/_/g, ' ')}{dist != null ? ` · ${dist < 1000 ? Math.round(dist) + ' m' : (dist / 1000).toFixed(1) + ' km'}` : ''}
+                    </Text>
+                  </View>
+                  {tier && <Text style={[styles.tier, { color: tier.color }]}>{tier.name} · {b!.laps}</Text>}
+                </Pressable>
+              );
+            }}
+          />
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const toneStyle = StyleSheet.create({
+  good: { borderColor: '#2f7d4a' },
+  bad: { borderColor: '#8a2b3d', backgroundColor: 'rgba(48,14,22,0.94)' },
+  gold: { borderColor: '#b38a1a', backgroundColor: 'rgba(40,32,8,0.94)' },
+  info: {},
+});
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  map: { width: '100%', height: '100%' },
+  root: { flex: 1, backgroundColor: '#0b0d12' },
+  top: { position: 'absolute', left: 12, right: 84 },
+  pill: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.bg, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: C.line, alignSelf: 'flex-start', maxWidth: '100%' },
+  dot: { width: 9, height: 9, borderRadius: 5, marginRight: 8 },
+  pillText: { color: C.text, fontWeight: '600', fontSize: 13, flexShrink: 1 },
+  pillDim: { color: C.dim, fontSize: 11, marginLeft: 8 },
+  toast: { backgroundColor: C.bg, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: C.line, alignSelf: 'flex-start' },
+  toastText: { color: C.text, fontWeight: '700', fontSize: 13 },
 
-  topHud: { position: 'absolute', top: 50, left: 20, zIndex: 10 },
-  hudCard: { backgroundColor: 'rgba(10,10,10,0.8)', padding: 15, borderRadius: 8, minWidth: 150 },
-  hudTitle: { color: '#888', fontSize: 10, fontWeight: 'bold', letterSpacing: 1, marginBottom: 5 },
-  hudStat: { color: 'white', fontSize: 18, fontWeight: 'bold' },
+  side: { position: 'absolute', right: 12, alignItems: 'center', gap: 8 },
+  sideBtn: { width: 62, paddingVertical: 7, borderRadius: 14, backgroundColor: C.bg, alignItems: 'center', borderWidth: 1, borderColor: C.line },
+  sideBtnOn: { backgroundColor: C.accent, borderColor: C.accent },
+  sideIcon: { fontSize: 18 },
+  sideLabel: { color: C.dim, fontSize: 9, fontWeight: '700', marginTop: 2 },
 
-  toast: { position: 'absolute', bottom: 50, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.8)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20, borderColor: '#333', borderWidth: 1 },
-  toastText: { color: 'white', fontWeight: 'bold' },
+  targetPill: { position: 'absolute', left: 12, backgroundColor: '#00f0ff', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
+  targetText: { color: '#001418', fontWeight: '800', fontSize: 12 },
+
+  bottom: { position: 'absolute', left: 12, right: 12, gap: 8 },
+  hud: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.bg, borderRadius: 18, padding: 12, borderWidth: 1, borderColor: C.line },
+  swatch: { width: 6, alignSelf: 'stretch', borderRadius: 3, marginRight: 12 },
+  hudLabel: { color: C.dim, fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
+  hudValue: { color: C.text, fontSize: 20, fontWeight: '800' },
+  hudDim: { color: C.dim, fontSize: 14 },
+  hudBtn: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#1d2230', alignItems: 'center', justifyContent: 'center', marginLeft: 6 },
+  hudBtnText: { fontSize: 20 },
+
+  simBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(40,32,8,0.94)', borderRadius: 14, padding: 8, gap: 6, borderWidth: 1, borderColor: '#5c4a12' },
+  simText: { color: '#ffd23f', fontWeight: '700', flex: 1, marginLeft: 4 },
+  chip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: '#5c4a12' },
+  chipOn: { backgroundColor: '#ffd23f' },
+  chipText: { color: '#ffd23f', fontWeight: '800' },
+
+  card: { backgroundColor: C.bg, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: C.line },
+  cardTitle: { color: C.text, fontSize: 17, fontWeight: '800' },
+  cardSub: { color: C.dim, fontSize: 12, marginTop: 2 },
+  cardRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginTop: 10 },
+  tier: { fontWeight: '800', fontSize: 13 },
+  bar: { height: 6, backgroundColor: '#1d2230', borderRadius: 3, marginVertical: 8, overflow: 'hidden' },
+  barFill: { height: 6, backgroundColor: C.accent },
+  btn: { flex: 1, backgroundColor: '#0f2a30', paddingVertical: 10, borderRadius: 12, alignItems: 'center' },
+  btnText: { color: C.accent, fontWeight: '800' },
+
+  sheetWrap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
+  sheet: { backgroundColor: '#11141c', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 16, borderColor: C.line, borderWidth: 1 },
+  grabber: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#333a4a', alignSelf: 'center', marginBottom: 12 },
+  search: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1f2b', borderRadius: 12, paddingHorizontal: 12, marginBottom: 10 },
+  searchInput: { flex: 1, color: C.text, height: 44 },
+  sheetHeader: { color: C.dim, fontWeight: '800', fontSize: 11, letterSpacing: 1.2, marginBottom: 6, textTransform: 'uppercase' },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.line },
+  rowTitle: { color: C.text, fontWeight: '700', fontSize: 15 },
 });

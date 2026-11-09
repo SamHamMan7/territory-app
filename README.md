@@ -1,50 +1,72 @@
-# Welcome to your Expo app 👋
+# Territory
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Paper.io meets Pokémon GO, played at walking speed. Walk out of your land, loop back, and everything you enclosed becomes yours. Walk all the way around real places (a McDonald's, a park, your school) to earn their badges, and keep circling to level them up.
 
-## Get started
-
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run it on your phone (Expo Go)
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Scan the QR code with **Expo Go** (Android) or the Camera app (iOS). The phone and computer need to be on the same Wi-Fi; if they aren't, use `npx expo start --tunnel`.
 
-## Learn more
+You don't need to go outside to test: tap **🧪** to turn on the walk simulator, then tap the map to walk there. The **4×** and **10×** buttons fast-forward time. Tap any place, then **Sim a lap** to walk a loop around it.
 
-To learn more about developing your project with Expo, look at the following resources:
+## Browser demo
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+Open `web-demo/index.html` in a browser (or run `npx serve web-demo`). It's the same map and game engine with a simulated walker. It plays a short tour by itself, then you can click the map to walk. Rebuild it after changing the game with `npm run demo:build`.
 
-## Join the community
+## How it plays
 
-Join our community of developers creating universal apps.
+| Rule | Default | Where to tune it |
+|---|---|---|
+| A home base is planted where you first open the app. It's permanently protected. | 12 m radius | `HOME_RADIUS_M` |
+| Leave your land to draw a trail. Get back to your land (or cross your own trail) to claim the loop and anything it surrounds. | | |
+| **Walking only:** over about 10 km/h your trail is dropped. | 2.8 m/s | `MAX_SPEED_MS` |
+| **Grace zone:** GPS is sloppy, so coming within 8 m of your land, or within 10 m of an older part of your trail, closes the loop. | 8 m / 10 m | `SNAP_TO_*` |
+| **Stealing:** a loop that covers a rival's land takes it. | | |
+| **Shield:** land you just captured can't be stolen for 30 min. | 30 min | `SHIELD_MS` |
+| **Cutting:** walk across a rival's trail and it's erased. | | |
+| **Laps:** go a full 360° around a place, staying within 150 m of it. | | `LAP_*` |
+| Badge tiers | Bronze 1 · Silver 3 · Gold 7 · Platinum 15 · Diamond 30 · Legend 50 | `LAP_TIERS` |
+| Chains like McDonald's or Starbucks roll up into one **collection** badge across all their locations. | | `game/places.ts` |
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Holding a place (👑) and having a badge for it are separate. Holding means its spot is inside your land, and rivals can take that. Badges are yours to keep.
+
+All tuning lives in `game/config.ts`.
+
+## Map stack (OpenStreetMap)
+
+- **MapLibre GL** renders the map. It runs in a WebView, which is why the app still works in Expo Go.
+- **Street** mode shows the standard OpenStreetMap tiles. These are free for light use under the [OSM tile policy](https://operations.osmfoundation.org/policies/tiles/); a public release should switch to a tile host such as OpenFreeMap, MapTiler or your own server.
+- **3D** mode draws OpenStreetMap data as vector tiles from OpenFreeMap, with extruded buildings, and tilts the map to your heading.
+- **God's Eye** mode is a satellite view from Esri World Imagery.
+- Nearby places are OpenStreetMap points of interest read from the vector tiles, so there's no extra API. Search uses Photon, an OpenStreetMap geocoder.
+
+## Code layout
+
+```
+game/
+  config.ts   all tuning numbers
+  geo.ts      geometry (areas, intersections, polygon union/difference)
+  engine.ts   the rules: trails, claiming, stealing, shields, speed gate
+  badges.ts   lap detection (winding angle) + tiers
+  places.ts   OSM places, chain/brand grouping, search
+  bots.ts     simulated free-for-all rivals
+  render.ts   game state → GeoJSON for the map
+  store.ts    game loop, GPS, sim, persistence
+components/map/
+  GameMap.tsx WebView bridge
+  mapHtml.ts  the MapLibre page
+app/(tabs)/index.tsx    Map screen
+app/(tabs)/explore.tsx  Badges + leaderboard
+scripts/engine.test.ts  rule tests: npm run test:engine
+web-demo/               browser demo (npm run demo:build)
+```
+
+## Next steps
+
+- **Real multiplayer:** sync `world` through a backend such as Supabase. The rules in `engine.ts` don't need to change, but claims should be checked on the server so nobody can fake GPS.
+- **Teams:** add a `team` field to `Player` and treat teammates' land as your own when closing loops.
+- **Background tracking:** needs a dev build (`expo-location` background mode + `expo-task-manager`). Expo Go only tracks while the app is open.

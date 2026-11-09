@@ -29,7 +29,7 @@ Open `web-demo/index.html` in a browser (or run `npx serve web-demo`). It's the 
 | **Shield:** land you just captured can't be stolen for 30 min. | 30 min | `SHIELD_MS` |
 | **No paper.io deaths:** if someone walks across your trail, nothing happens. Your trail only ends when you close a loop, go too fast, or lose GPS for 5+ minutes. | | |
 | **Laps:** go a full 360° around a place, staying within 150 m of it. | | `LAP_*` |
-| Badge tiers | Bronze 1 · Silver 3 · Gold 7 · Platinum 15 · Diamond 30 · Legend 50 | `LAP_TIERS` |
+| Badge levels | Level 1, 2, 3… with no cap. Each level takes one more lap than the last: 1, 3, 6, 10, 15… laps in total | `lapsForLevel` in `game/badges.ts` |
 | Chains like McDonald's or Starbucks roll up into one **collection** badge across all their locations. | | `game/places.ts` |
 
 Holding a place (👑) and having a badge for it are separate. Holding means its spot is inside your land, which other players will be able to take once multiplayer exists. Badges are yours to keep.
@@ -43,6 +43,25 @@ All tuning lives in `game/config.ts`.
 - **3D** mode draws OpenStreetMap data as vector tiles from OpenFreeMap, with extruded buildings, and tilts the map to your heading.
 - **God's Eye** mode is a satellite view from Esri World Imagery.
 - Nearby places are OpenStreetMap points of interest read from the vector tiles, so there's no extra API. Search uses Photon, an OpenStreetMap geocoder.
+
+## God's Eye 3D (optional)
+
+God's Eye mode is a CesiumJS 3D globe, inspired by [bilawalsidhu/gods-eye-view](https://github.com/bilawalsidhu/gods-eye-view). It has a drone-style camera that follows you, and you can drag to orbit. The Lens menu adds **Night vision**, **Thermal** and **CRT** filters.
+
+With no key it uses satellite imagery. To get photorealistic 3D buildings (Google Photorealistic 3D Tiles), create a file named `.env.local` in the project folder with one of these lines:
+
+```
+EXPO_PUBLIC_CESIUM_ION_TOKEN=your-cesium-ion-token
+# or
+EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=your-google-maps-key
+```
+
+- **Cesium ion token:** free at [ion.cesium.com](https://ion.cesium.com/) under Access Tokens. Free for personal/non-commercial use.
+- **Google Maps key:** from Google Cloud with the **Map Tiles API** enabled. It's metered.
+
+Restart `npx expo start` after adding it. `.env.local` is git-ignored, but `EXPO_PUBLIC_` values are built into the app, so restrict the key in its console before you ship.
+
+In the browser demo, add the key to the address instead: `web-demo/index.html?cesium=YOUR_TOKEN`.
 
 ## Code layout
 

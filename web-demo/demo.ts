@@ -71,6 +71,7 @@ function renderHud() {
   $('sicon').textContent = icon; $('sicon').style.color = color; $('status').textContent = text;
   document.querySelectorAll<HTMLElement>('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
   document.querySelectorAll<HTMLElement>('[data-turbo]').forEach((b) => b.classList.toggle('on', Number(b.dataset.turbo) === turbo));
+  document.querySelectorAll<HTMLElement>('[data-lens]').forEach((b) => b.classList.toggle('on', b.dataset.lens === lens));
   // place card replaces the stats card, like the app
   $('place').style.display = selected ? 'block' : 'none';
   $('stats').style.display = selected ? 'none' : 'flex';
@@ -83,9 +84,9 @@ function renderHud() {
     $('pemoji').style.borderColor = tier?.color ?? '#e5e7eb';
     $('pname').textContent = selected.name;
     $('pmeta').textContent = `${selected.category.replace(/_/g, ' ')} · ${Math.round(d)} m`;
-    $('ptier').textContent = tier ? `${tier.name} badge` : 'No badge yet';
+    $('ptier').textContent = tier ? tier.name : 'No badge yet';
     $('ptier').style.color = tier?.color ?? '#6b7280';
-    $('plaps').textContent = `${laps} ${laps === 1 ? 'lap' : 'laps'}${next ? ` · ${next.laps - laps} more for ${next.name}` : ''}`;
+    $('plaps').textContent = `${laps} ${laps === 1 ? 'lap' : 'laps'}${` · ${next.laps - laps} more for ${next.name}`}`;
     $('pbar').style.width = `${lapProgress(badges, selected.id) * 100}%`;
   }
 }
@@ -101,7 +102,7 @@ function feed(p: LngLat) {
   }
   const near = Object.values(places).filter((pl) => distance(p, [pl.lng, pl.lat]) < CONFIG.LAP_MAX_RADIUS_M + 20);
   for (const lap of trackLaps(badges, p, near, now)) {
-    if (lap.tierUp) toast(`🏅 ${lap.place.name} badge → ${lap.tierUp.name}!`, 'gold');
+    if (lap.tierUp) toast(`🏅 ${lap.place.name} reached ${lap.tierUp.name}!`, 'gold');
     else toast(`${lap.place.emoji} Lap ${lap.laps} around ${lap.place.name}`, 'good');
     if (target?.id === lap.place.id) target = null;
   }
@@ -173,14 +174,24 @@ $('layersBtn').addEventListener('click', () => {
   $('layersBtn').classList.toggle('on', open);
 });
 document.querySelectorAll<HTMLElement>('[data-mode]').forEach((b) =>
-  b.addEventListener('click', () => { setMode(b.dataset.mode!); layers.style.display = 'none'; $('layersBtn').classList.remove('on'); }));
+  b.addEventListener('click', () => {
+    setMode(b.dataset.mode!);
+    if (b.dataset.mode !== 'gods') { layers.style.display = 'none'; $('layersBtn').classList.remove('on'); }
+  }));
+let lens = 'normal';
+function setLens(l: string) { lens = l; send({ type: 'lens', lens: l }); }
+document.querySelectorAll<HTMLElement>('[data-lens]').forEach((b) => b.addEventListener('click', () => setLens(b.dataset.lens!)));
 document.querySelectorAll<HTMLElement>('[data-turbo]').forEach((b) =>
   b.addEventListener('click', () => { turbo = Number(b.dataset.turbo); }));
 $('recenter').addEventListener('click', () => send({ type: 'recenter' }));
 $('pclose').addEventListener('click', () => { selected = null; });
 $('plap').addEventListener('click', () => { if (selected) { autoplay = false; target = selected; queue = lapPath(selected); } });
 $('placesBtn').addEventListener('click', () => { const p = nearest(1)[0]; if (p) { selected = p; send({ type: 'flyTo', lng: p.lng, lat: p.lat }); } });
-function setMode(m: string) { mode = m; send({ type: 'mode', mode: m }); }
+function setMode(m: string) { mode = m; document.body.classList.toggle('gods', m === 'gods'); send({ type: 'mode', mode: m }); }
+
+// Photorealistic 3D for God's Eye: open index.html?cesium=YOUR_ION_TOKEN (or ?google=YOUR_MAPS_KEY)
+const qs = new URLSearchParams(location.search);
+send({ type: 'config', cesiumToken: qs.get('cesium'), googleKey: qs.get('google') });
 
 // keep the map focus clear of the bottom card, and the OSM credit visible
 new ResizeObserver(() => send({ type: 'padding', top: 70, bottom: $('bottom').offsetHeight + 20 })).observe($('bottom'));
@@ -188,4 +199,4 @@ new ResizeObserver(() => send({ type: 'padding', top: 70, bottom: $('bottom').of
 // ---------- start ----------
 plantHome(me, START);
 feed(START);
-window.__demo = { world, badges, places, setMode, setTurbo: (t: number) => { turbo = t; }, get scene() { return scene; } };
+window.__demo = { world, badges, places, setMode, setLens, setTurbo: (t: number) => { turbo = t; }, get scene() { return scene; } };

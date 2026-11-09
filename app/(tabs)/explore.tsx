@@ -5,7 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { UI, shadow } from '@/constants/ui';
-import { brandCollections, nextTier, tierFor } from '@/game/badges';
+import { brandCollections, lapsForLevel, nextTier, tierFor } from '@/game/badges';
 import { CONFIG } from '@/game/config';
 import { areaOf } from '@/game/engine';
 import { actions, fmtArea, useGame } from '@/game/store';
@@ -59,12 +59,13 @@ export default function BadgesScreen() {
             Pick a spot on the map, like a café, a park or your school, and walk a full loop around it.
           </Text>
           <View style={styles.tiers}>
-            {CONFIG.LAP_TIERS.map((t) => (
-              <View key={t.name} style={styles.tierChip}>
-                <View style={[styles.tierDot, { backgroundColor: t.color }]} />
-                <Text style={styles.tierChipText}>{t.name} · {t.laps}</Text>
+            {[1, 2, 3, 4, 5].map((lv) => (
+              <View key={lv} style={styles.tierChip}>
+                <View style={[styles.tierDot, { backgroundColor: CONFIG.LEVEL_COLORS[lv - 1] }]} />
+                <Text style={styles.tierChipText}>Level {lv} · {lapsForLevel(lv)} {lv === 1 ? 'lap' : 'laps'}</Text>
               </View>
             ))}
+            <View style={styles.tierChip}><Text style={styles.tierChipText}>and up…</Text></View>
           </View>
         </View>
       ) : (
@@ -73,7 +74,7 @@ export default function BadgesScreen() {
             const tier = tierFor(p.laps);
             const next = nextTier(p.laps);
             const prevAt = tier?.laps ?? 0;
-            const pct = next ? (p.laps - prevAt) / (next.laps - prevAt) : 1;
+            const pct = (p.laps - prevAt) / (next.laps - prevAt);
             return (
               <View key={p.placeId} style={[styles.placeRow, i > 0 && styles.sep]}>
                 <View style={[styles.medalSm, { borderColor: tier?.color ?? UI.line }]}><Text style={{ fontSize: 20 }}>{p.emoji}</Text></View>
@@ -83,9 +84,9 @@ export default function BadgesScreen() {
                     <Text style={[styles.tier, { color: tier?.color }]}>{tier?.name}</Text>
                   </View>
                   <Text style={styles.sub}>
-                    {p.laps} {p.laps === 1 ? 'lap' : 'laps'}{next ? ` · ${next.laps - p.laps} more for ${next.name}` : ' · max level'}
+                    {p.laps} {p.laps === 1 ? 'lap' : 'laps'}{` · ${next.laps - p.laps} more for ${next.name}`}
                   </Text>
-                  <View style={styles.bar}><View style={[styles.barFill, { width: `${pct * 100}%`, backgroundColor: next?.color ?? tier?.color }]} /></View>
+                  <View style={styles.bar}><View style={[styles.barFill, { width: `${pct * 100}%`, backgroundColor: next.color }]} /></View>
                 </View>
               </View>
             );

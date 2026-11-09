@@ -12,6 +12,7 @@ export const GameMap = React.memo(function GameMap() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mode = useGame((s) => s.mode);
+  const lens = useGame((s) => s.lens);
 
   // Push world state to the map, throttled to ~3 fps.
   useEffect(() => {
@@ -37,6 +38,10 @@ export const GameMap = React.memo(function GameMap() {
     if (ready) send({ type: 'mode', mode });
   }, [mode, ready]);
 
+  useEffect(() => {
+    if (ready) send({ type: 'lens', lens });
+  }, [lens, ready]);
+
   // Let other components drive the camera.
   useEffect(() => {
     cameraBus = (m) => send(m);
@@ -54,6 +59,12 @@ export const GameMap = React.memo(function GameMap() {
       case 'ready':
         setReady(true); setError(null);
         if (lastPadding) send({ type: 'padding', ...lastPadding });
+        // Optional keys for photorealistic 3D in God's Eye (see README → "God's Eye 3D")
+        send({
+          type: 'config',
+          cesiumToken: process.env.EXPO_PUBLIC_CESIUM_ION_TOKEN || null,
+          googleKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || null,
+        });
         break;
       case 'tap': actions.simTap(m.lng, m.lat); actions.selectPlace(null); break;
       case 'poi': actions.selectPlace(m.id); break;

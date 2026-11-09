@@ -12,7 +12,7 @@ import { CONFIG } from '@/game/config';
 import { areaOf, ownerAt } from '@/game/engine';
 import { distance } from '@/game/geo';
 import { Place, SearchResult, searchPlaces } from '@/game/places';
-import { MapMode, actions, fmtArea, myStatus, nearbyPlaces, useGame } from '@/game/store';
+import { Lens, MapMode, actions, fmtArea, myStatus, nearbyPlaces, useGame } from '@/game/store';
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
@@ -135,8 +135,16 @@ const LAYERS: { mode: MapMode; icon: IconName; label: string }[] = [
   { mode: 'tilt', icon: 'location-city', label: '3D' },
 ];
 
+const LENSES: { lens: Lens; icon: IconName; label: string }[] = [
+  { lens: 'normal', icon: 'visibility', label: 'Normal' },
+  { lens: 'nvg', icon: 'nightlight', label: 'Night vision' },
+  { lens: 'thermal', icon: 'thermostat', label: 'Thermal' },
+  { lens: 'crt', icon: 'tv', label: 'CRT' },
+];
+
 function LayersMenu({ top, onClose }: { top: number; onClose: () => void }) {
   const mode = useGame((s) => s.mode);
+  const lens = useGame((s) => s.lens);
   return (
     <>
       <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
@@ -146,7 +154,7 @@ function LayersMenu({ top, onClose }: { top: number; onClose: () => void }) {
           {LAYERS.map((l) => {
             const on = mode === l.mode;
             return (
-              <Pressable key={l.mode} style={styles.layer} onPress={() => { actions.setMode(l.mode); onClose(); }}>
+              <Pressable key={l.mode} style={styles.layer} onPress={() => { actions.setMode(l.mode); if (l.mode !== 'gods') onClose(); }}>
                 <View style={[styles.layerIcon, on && { borderColor: UI.accent, backgroundColor: UI.accentSoft }]}>
                   <MaterialIcons name={l.icon} size={24} color={on ? UI.accent : UI.sub} />
                 </View>
@@ -155,6 +163,22 @@ function LayersMenu({ top, onClose }: { top: number; onClose: () => void }) {
             );
           })}
         </View>
+        {mode === 'gods' && (
+          <>
+            <Text style={[styles.label, { marginTop: 16, marginBottom: 8 }]}>Lens</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, maxWidth: 236 }}>
+              {LENSES.map((l) => {
+                const on = lens === l.lens;
+                return (
+                  <Pressable key={l.lens} onPress={() => actions.setLens(l.lens)} style={[styles.lensChip, on && styles.lensChipOn]}>
+                    <MaterialIcons name={l.icon} size={15} color={on ? '#fff' : UI.sub} />
+                    <Text style={[styles.lensText, on && { color: '#fff' }]}>{l.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </>
+        )}
       </View>
     </>
   );
@@ -206,9 +230,9 @@ function PlaceCard({ place }: { place: Place }) {
 
       <View style={styles.badgeRow}>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.tierText, { color: tier?.color ?? UI.sub }]}>{tier ? `${tier.name} badge` : 'No badge yet'}</Text>
+          <Text style={[styles.tierText, { color: tier?.color ?? UI.sub }]}>{tier ? tier.name : 'No badge yet'}</Text>
           <Text style={styles.sub}>
-            {laps} {laps === 1 ? 'lap' : 'laps'}{next ? ` · ${next.laps - laps} more for ${next.name}` : ' · max level'}
+            {laps} {laps === 1 ? 'lap' : 'laps'}{` · ${next.laps - laps} more for ${next.name}`}
           </Text>
         </View>
         {prog > 0 && <Text style={styles.progText}>{Math.round(prog * 100)}%</Text>}
@@ -327,6 +351,9 @@ const styles = StyleSheet.create({
   layer: { alignItems: 'center', width: 72 },
   layerIcon: { width: 56, height: 56, borderRadius: 14, borderWidth: 2, borderColor: UI.line, alignItems: 'center', justifyContent: 'center', backgroundColor: UI.bg },
   layerLabel: { marginTop: 6, fontSize: 12, fontWeight: '600', color: UI.sub },
+  lensChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: UI.bg },
+  lensChipOn: { backgroundColor: UI.text },
+  lensText: { fontSize: 12, fontWeight: '600', color: UI.sub },
 
   bottom: { position: 'absolute', left: 12, right: 12, bottom: 12, gap: 10 },
   card: { backgroundColor: UI.card, borderRadius: UI.radius + 4, padding: 18 },

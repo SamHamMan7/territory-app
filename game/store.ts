@@ -13,6 +13,7 @@ import { LngLat, bearing, distance, offset, pathLength, pointInMulti, projector 
 import { Place, makePlace } from './places';
 
 export type MapMode = 'street' | 'gods' | 'tilt';
+export type Lens = 'normal' | 'nvg' | 'thermal' | 'crt';
 export type FeedItem = { id: number; text: string; tone: 'good' | 'bad' | 'info' | 'gold' };
 
 export type GameState = {
@@ -24,6 +25,7 @@ export type GameState = {
   target: Place | null;
   selectedPlaceId: string | null;
   mode: MapMode;
+  lens: Lens;
   follow: boolean;
   sim: { on: boolean; turbo: number; dest: LngLat | null };
   gps: { status: 'waiting' | 'ok' | 'denied' | 'error'; accuracy: number | null };
@@ -44,6 +46,7 @@ let state: GameState = {
   target: null,
   selectedPlaceId: null,
   mode: 'street',
+  lens: 'normal',
   follow: true,
   sim: { on: false, turbo: 1, dest: null },
   gps: { status: 'waiting', accuracy: null },
@@ -195,7 +198,7 @@ export function handleFix(fix: Fix) {
     const near = Object.values(state.places).filter((p) => distance(me.pos!, [p.lng, p.lat]) < CONFIG.LAP_MAX_RADIUS_M + 20);
     for (const lap of trackLaps(state.badges, me.pos, near, fix.t)) {
       if (lap.tierUp) {
-        toast(`🏅 ${lap.place.name} badge → ${lap.tierUp.name}!`, 'gold');
+        toast(`🏅 ${lap.place.name} reached ${lap.tierUp.name}!`, 'gold');
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       } else toast(`${lap.place.emoji} Lap ${lap.laps} around ${lap.place.name}`, 'good');
       if (state.target?.id === lap.place.id) state.target = null;
@@ -271,6 +274,7 @@ let simQueue: LngLat[] = [];
 
 export const actions = {
   setMode: (mode: MapMode) => { dirty = true; set({ mode }); },
+  setLens: (lens: Lens) => set({ lens }),
   setFollow: (follow: boolean) => state.follow !== follow && set({ follow }),
   toggleSim() {
     const on = !state.sim.on;

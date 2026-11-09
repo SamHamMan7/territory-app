@@ -24,14 +24,8 @@ export const CONFIG = {
   // --- Landmark laps (badges) ---
   LAP_MAX_RADIUS_M: 150, // must stay within this of the place while circling
   LAP_MIN_RADIUS_M: 3,
-  LAP_TIERS: [
-    { laps: 1, name: 'Bronze', color: '#b8732e' },
-    { laps: 3, name: 'Silver', color: '#8a94a6' },
-    { laps: 7, name: 'Gold', color: '#d9a400' },
-    { laps: 15, name: 'Platinum', color: '#22a99a' },
-    { laps: 30, name: 'Diamond', color: '#4a7dff' },
-    { laps: 50, name: 'Legend', color: '#d23fb0' },
-  ],
+  // Badge levels go 1, 2, 3… forever. Laps needed: 1, 3, 6, 10, 15… (see lapsForLevel in badges.ts)
+  LEVEL_COLORS: ['#b8732e', '#8a94a6', '#d9a400', '#22a99a', '#4a7dff', '#8b5cf6', '#d23fb0', '#e11d48'],
 };
 
 export const PLAYER_COLORS = ['#2b7cff', '#ff4f8b', '#f5b400', '#20b26b', '#8b5cf6', '#ff7a1a'];

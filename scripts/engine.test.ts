@@ -64,4 +64,8 @@ assert(before>3 && c1.trail.length===before,'trail survives someone walking acro
 const st=emptyBadges(); const place=makePlace({name:"McDonald's",cls:'amenity',sub:'fast_food',lng:O[0],lat:O[1]});
 let laps:any[]=[];
 for(let k=0;k<=2*72+3;k++){ const a=k*Math.PI*2/72; const p=offset(O,Math.cos(a)*30+(Math.random()-.5)*4,Math.sin(a)*30+(Math.random()-.5)*4); laps.push(...trackLaps(st,p,[place],k)); }
-assert(laps.length===2 && laps[0].tierUp?.name==='Bronze' && place.brand==="McDonald's",'two laps counted, bronze, brand '+laps.length);
+assert(laps.length===2 && laps[0].tierUp?.name==='Level 1' && place.brand==="McDonald's",'two laps counted, level 1, brand '+laps.length);
+// 7. levels are unbounded: 1,3,6,10,15...
+import { tierFor, nextTier } from '../game/badges';
+assert(tierFor(0)===null && tierFor(1)!.level===1 && tierFor(2)!.level===1 && tierFor(3)!.level===2 && tierFor(6)!.level===3 && tierFor(10)!.level===4 && tierFor(5050)!.level===100,'levels 1,2,3,4...100');
+assert(nextTier(4).level===3 && nextTier(4).laps===6,'next level needs 6 laps');

@@ -20,6 +20,11 @@
   #layers button{width:72px;background:none;border:0;cursor:pointer;font:600 12px system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;gap:6px}
   #layers button b{width:56px;height:56px;border-radius:14px;border:2px solid var(--line);background:var(--bg);display:flex;align-items:center;justify-content:center}
   #layers button.on{color:var(--accent)} #layers button.on b{border-color:var(--accent);background:var(--soft)}
+  #lensRow{display:none} body.gods #lensRow{display:block}
+  .lenses{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;max-width:236px}
+  .lenses button{display:flex;align-items:center;gap:5px;border:0;border-radius:12px;padding:7px 10px;background:var(--bg);color:var(--sub);font:600 12px system-ui;cursor:pointer}
+  .lenses button .mi{font-size:15px}
+  .lenses button.on{background:var(--text);color:#fff}
   #bottom{left:12px;right:12px;bottom:12px;display:flex;flex-direction:column;gap:10px}
   .card{background:#fff;border-radius:22px;padding:18px}
   #stats{display:flex;align-items:center;gap:6px}
@@ -57,6 +62,13 @@
     <button data-mode="gods"><b><i class="mi">satellite_alt</i></b>God's Eye</button>
     <button data-mode="tilt"><b><i class="mi">location_city</i></b>3D</button>
   </div>
+  <div id="lensRow"><div class="t" style="margin-top:16px">Lens</div>
+    <div class="lenses">
+      <button data-lens="normal"><i class="mi">visibility</i>Normal</button>
+      <button data-lens="nvg"><i class="mi">nightlight</i>Night vision</button>
+      <button data-lens="thermal"><i class="mi">thermostat</i>Thermal</button>
+      <button data-lens="crt"><i class="mi">tv</i>CRT</button>
+    </div></div>
 </div>
 <div id="bottom" class="hud">
   <div id="sim" class="shadow"><i class="mi" style="font-size:16px">science</i><span>Simulating · click map to walk</span>

@@ -23,16 +23,28 @@ export type BadgeState = { places: Record<string, PlaceBadge>; winding: Record<s
 export const emptyBadges = (): BadgeState => ({ places: {}, winding: {} });
 
 export type LapEvent = { place: Place; laps: number; tierUp: Tier | null };
-export type Tier = (typeof CONFIG.LAP_TIERS)[number];
+export type Tier = { level: number; laps: number; name: string; color: string };
 
-export function tierFor(laps: number): Tier | null {
-  let t: Tier | null = null;
-  for (const tier of CONFIG.LAP_TIERS) if (laps >= tier.laps) t = tier;
-  return t;
+/** Laps needed to reach a level. Each level takes one more lap than the last: 1, 3, 6, 10, 15… */
+export function lapsForLevel(level: number) {
+  return (level * (level + 1)) / 2;
 }
 
-export function nextTier(laps: number): Tier | null {
-  return CONFIG.LAP_TIERS.find((t) => t.laps > laps) ?? null;
+function tier(level: number): Tier {
+  const colors = CONFIG.LEVEL_COLORS;
+  return { level, laps: lapsForLevel(level), name: `Level ${level}`, color: colors[(level - 1) % colors.length] };
+}
+
+/** Current level for a lap count (null before the first lap). No cap. */
+export function tierFor(laps: number): Tier | null {
+  if (laps < 1) return null;
+  let level = Math.floor((Math.sqrt(8 * laps + 1) - 1) / 2);
+  while (lapsForLevel(level + 1) <= laps) level++;
+  return tier(level);
+}
+
+export function nextTier(laps: number): Tier {
+  return tier((tierFor(laps)?.level ?? 0) + 1);
 }
 
 /** Fraction (0..1) of the current lap completed around a place. */

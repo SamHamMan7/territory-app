@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { hexToRgba } from './colors.ts';
+import { hexToRgba } from './colors';
 
 test('hexToRgba converts 6-character hex to rgba', () => {
   assert.strictEqual(hexToRgba('#ff0000', 1), 'rgba(255,0,0,1)');

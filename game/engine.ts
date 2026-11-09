@@ -19,7 +19,7 @@ export type Player = {
   lastT: number;
   speed: number; // smoothed m/s
   tooFast: boolean;
-  stats: { captured: number; stolen: number; lost: number; cuts: number };
+  stats: { captured: number; stolen: number; lost: number };
 };
 
 export type World = { players: Record<string, Player> };
@@ -28,7 +28,6 @@ export type Fix = { lng: number; lat: number; accuracy?: number | null; t: numbe
 
 export type GameEvent =
   | { type: 'claim'; playerId: string; area: number; stolen: { from: string; area: number }[] }
-  | { type: 'cut'; by: string; victim: string; trailM: number }
   | { type: 'trail-broken'; playerId: string; reason: 'too-fast' | 'gps-gap' }
   | { type: 'trail-started'; playerId: string }
   | { type: 'eliminated'; playerId: string; by: string };
@@ -37,7 +36,7 @@ export function newPlayer(id: string, name: string, color: string, isBot: boolea
   return {
     id, name, color, isBot,
     territory: [], shields: [], trail: [], pos: null, lastT: 0, speed: 0, tooFast: false,
-    stats: { captured: 0, stolen: 0, lost: 0, cuts: 0 },
+    stats: { captured: 0, stolen: 0, lost: 0 },
   };
 }
 
@@ -105,9 +104,6 @@ export function processFix(world: World, playerId: string, fix: Fix): GameEvent[
     me.tooFast = false;
   }
 
-  // Cutting rival trails (paper.io: crossing someone's line cuts it).
-  cutRivalTrails(world, me, prev, pos, events);
-
   const inside =
     me.territory.length > 0 &&
     (pointInMulti(pos, me.territory) || distToMultiEdge(pos, me.territory) <= CONFIG.SNAP_TO_TERRITORY_M);
@@ -155,22 +151,6 @@ export function processFix(world: World, playerId: string, fix: Fix): GameEvent[
   trail.push(pos);
   if (trail.length > CONFIG.MAX_TRAIL_POINTS) trail.splice(0, trail.length - CONFIG.MAX_TRAIL_POINTS);
   return events;
-}
-
-function cutRivalTrails(world: World, me: Player, a: LngLat, b: LngLat, events: GameEvent[]) {
-  for (const other of Object.values(world.players)) {
-    if (other.id === me.id || other.trail.length < 2) continue;
-    if (me.isBot && !other.isBot && !CONFIG.BOTS_CAN_CUT_PLAYER_TRAIL) continue;
-    const t = other.trail;
-    for (let i = 0; i < t.length - 1; i++) {
-      if (segmentIntersection(a, b, t[i], t[i + 1])) {
-        events.push({ type: 'cut', by: me.id, victim: other.id, trailM: Math.round(pathLength(t)) });
-        other.trail = [];
-        me.stats.cuts++;
-        break;
-      }
-    }
-  }
 }
 
 /** Claim the area enclosed by `loop` (plus anything it fully surrounds), stealing from rivals. */

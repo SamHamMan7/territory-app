@@ -2,7 +2,6 @@ import { CONFIG } from '../game/config';
 import { newPlayer, plantHome, processFix, World, areaOf } from '../game/engine';
 import { offset, LngLat } from '../game/geo';
 import { emptyBadges, trackLaps } from '../game/badges';
-import { spawnBots, tickBots } from '../game/bots';
 import { makePlace } from '../game/places';
 const assert=(c:any,m:string)=>{ if(!c){console.error('FAIL',m);process.exitCode=1} else console.log('ok',m)};
 const O:LngLat=[-95.37,29.76];
@@ -55,23 +54,14 @@ assert(st2 && st2.stolen.some((s:any)=>s.from==='a'&&s.area>50),'steal after shi
 assert(areaOf(A)<aArea,'A lost land '+aArea.toFixed(0)+' -> '+areaOf(A).toFixed(0));
 // home never stolen
 assert(areaOf(A)>=Math.PI*144*0.95,'home kept');
-// 5. cutting trails
+// 5. crossing someone's trail does NOT erase it (no paper.io deaths)
 let w4:World={players:{}}; const c1=newPlayer('c1','c','#0',false), c2=newPlayer('c2','d','#1',false); w4.players.c1=c1; w4.players.c2=c2;
 plantHome(c1,O); processFix(w4,'c1',{lng:O[0],lat:O[1],t:0}); walk(w4,'c1',[offset(O,0,60)],0);
-assert(c1.trail.length>3,'c1 has trail');
-const s2=offset(O,-20,30); processFix(w4,'c2',{lng:s2[0],lat:s2[1],t:0}); const rc=walk(w4,'c2',[offset(O,20,30)],0);
-assert(rc.ev.some(e=>e.type==='cut'&&e.victim==='c1') && c1.trail.length===0,'crossing a trail cuts it');
+const before=c1.trail.length;
+const s2=offset(O,-20,30); processFix(w4,'c2',{lng:s2[0],lat:s2[1],t:0}); walk(w4,'c2',[offset(O,20,30)],0);
+assert(before>3 && c1.trail.length===before,'trail survives someone walking across it');
 // 6. laps
 const st=emptyBadges(); const place=makePlace({name:"McDonald's",cls:'amenity',sub:'fast_food',lng:O[0],lat:O[1]});
 let laps:any[]=[];
 for(let k=0;k<=2*72+3;k++){ const a=k*Math.PI*2/72; const p=offset(O,Math.cos(a)*30+(Math.random()-.5)*4,Math.sin(a)*30+(Math.random()-.5)*4); laps.push(...trackLaps(st,p,[place],k)); }
 assert(laps.length===2 && laps[0].tierUp?.name==='Bronze' && place.brand==="McDonald's",'two laps counted, bronze, brand '+laps.length);
-// 7. bots over 40 min
-let w5:World={players:{}}; const h=newPlayer('me','Me','#3dd6ff',false); w5.players.me=h; plantHome(h,O); h.pos=O;
-walk(w5,'me',[offset(O,0,0),offset(O,40,0),offset(O,40,40),offset(O,0,40),O],0);
-const brains=spawnBots(w5,O,0,h.color); let allEv:any[]=[]; const t0=Date.now();
-for(let t=0;t<40*60_000;t+=1000) allEv.push(...tickBots(w5,brains,'me',t,1000));
-const bc=allEv.filter(e=>e.type==='claim');
-console.log('bot claims',bc.length,'steals from me',bc.filter(e=>e.stolen.some((s:any)=>s.from==='me')).length,'ms',Date.now()-t0);
-assert(bc.length>5,'bots claim land');
-for(const b of brains) console.log(b.id, areaOf(w5.players[b.id]).toFixed(0));

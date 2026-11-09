@@ -1,4 +1,4 @@
-import { DarkTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
@@ -18,12 +18,12 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <ThemeProvider value={{ ...DarkTheme, colors: { ...DarkTheme.colors, background: '#0b0d12' } }}>
+    <ThemeProvider value={{ ...DefaultTheme, colors: { ...DefaultTheme.colors, background: '#f4f5f7' } }}>
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
     </ThemeProvider>
   );
 }

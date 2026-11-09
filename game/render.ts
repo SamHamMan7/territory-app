@@ -71,7 +71,6 @@ export function buildMapMessage(opts: {
     type: 'world' as const,
     terr, trails, shields, target: target_,
     pois: poiList,
-    bots: players.filter((p) => p.isBot && p.pos && p.territory.length).map((p) => ({ id: p.id, name: p.name, color: p.color, lng: p.pos![0], lat: p.pos![1] })),
     me: me?.pos ? { lng: me.pos[0], lat: me.pos[1], color: me.color, heading } : null,
   };
 }

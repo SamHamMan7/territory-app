@@ -12,18 +12,19 @@ export const mapHtml = /* html */ `<!doctype html>
 <link href="https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.css" rel="stylesheet" />
 <script src="https://unpkg.com/maplibre-gl@${MAPLIBRE_VERSION}/dist/maplibre-gl.js"></script>
 <style>
-  html,body,#map{margin:0;height:100%;width:100%;background:#0b0d12;overflow:hidden}
-  .maplibregl-ctrl-attrib{font-size:9px;opacity:.7}
-  .me{width:18px;height:18px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 0 var(--c);animation:pulse 1.8s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 var(--c)}70%{box-shadow:0 0 0 18px transparent}100%{box-shadow:0 0 0 0 transparent}}
-  .bot{width:22px;height:22px;border-radius:50%;border:2px solid #0b0d12;color:#0b0d12;font:800 11px system-ui;display:flex;align-items:center;justify-content:center}
-  .poi{display:flex;flex-direction:column;align-items:center;cursor:pointer;transform-origin:bottom center}
-  .poi .b{width:30px;height:30px;border-radius:50%;background:rgba(15,18,26,.88);display:flex;align-items:center;justify-content:center;font-size:16px;border:2px solid #3a4152;position:relative}
-  .poi .crown{position:absolute;top:-9px;right:-7px;font-size:11px}
-  .poi .lv{font:700 9px system-ui;color:#fff;background:rgba(0,0,0,.6);padding:1px 4px;border-radius:6px;margin-top:2px;max-width:90px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .poi.small .b{width:22px;height:22px;font-size:12px}
+  html,body,#map{margin:0;height:100%;width:100%;background:#f2efe9;overflow:hidden}
+  .maplibregl-ctrl-attrib{font-size:9px;opacity:.8}
+  .maplibregl-ctrl-bottom-right,.maplibregl-ctrl-bottom-left{bottom:var(--attr-bottom,0)}
+  .me{width:20px;height:20px;border-radius:50%;background:var(--c);border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35),0 0 0 0 var(--h);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 1px 4px rgba(0,0,0,.35),0 0 0 0 var(--h)}70%{box-shadow:0 1px 4px rgba(0,0,0,.35),0 0 0 22px transparent}100%{box-shadow:0 1px 4px rgba(0,0,0,.35),0 0 0 0 transparent}}
+  .poi{display:flex;flex-direction:column;align-items:center;cursor:pointer}
+  .poi .b{width:30px;height:30px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;border:2.5px solid #fff;position:relative;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .poi .crown{position:absolute;top:-8px;right:-8px;font-size:12px}
+  .poi .lv{font:600 11px -apple-system,system-ui,Segoe UI,Roboto,sans-serif;color:#111827;margin-top:3px;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff,0 0 3px #fff}
+  .poi.small .b{width:22px;height:22px;font-size:12px;border-width:2px}
   .poi.small .lv{display:none}
-  .ring{position:absolute;inset:-5px;border-radius:50%}
+  .ring{position:absolute;inset:-6px;border-radius:50%}
 </style></head>
 <body><div id="map"></div>
 <script>
@@ -55,7 +56,7 @@ export const mapHtml = /* html */ `<!doctype html>
     },
     layers: [
       { id:'sat', type:'raster', source:'sat' },
-      { id:'shade', type:'background', paint:{'background-color':'#000','background-opacity':0.18} },
+      { id:'shade', type:'background', paint:{'background-color':'#000','background-opacity':0.1} },
       POI_PROBE,
     ],
   };
@@ -75,13 +76,13 @@ export const mapHtml = /* html */ `<!doctype html>
     const g = mode === 'gods';
     for (const k of Object.keys(data)) if (!map.getSource(k)) map.addSource(k, {type:'geojson', data:data[k]});
     const add = (l) => { if (!map.getLayer(l.id)) map.addLayer(l); };
-    add({ id:'terr-fill', type:'fill', source:'terr', paint:{ 'fill-color':['get','color'], 'fill-opacity':['case',['get','mine'], g?0.45:0.38, g?0.35:0.26] }});
-    add({ id:'terr-glow', type:'line', source:'terr', paint:{ 'line-color':['get','color'], 'line-width': g?10:6, 'line-blur': g?8:5, 'line-opacity':0.55 }});
-    add({ id:'terr-line', type:'line', source:'terr', paint:{ 'line-color':['get','color'], 'line-width':2 }});
-    add({ id:'shield-line', type:'line', source:'shields', paint:{ 'line-color':'#ffffff', 'line-width':1.5, 'line-dasharray':[1,2], 'line-opacity':0.7 }});
-    add({ id:'trail-glow', type:'line', source:'trails', layout:{'line-cap':'round','line-join':'round'}, paint:{ 'line-color':['get','color'], 'line-width':10, 'line-blur':6, 'line-opacity':0.5 }});
-    add({ id:'trail-line', type:'line', source:'trails', layout:{'line-cap':'round','line-join':'round'}, paint:{ 'line-color':['get','color'], 'line-width':4, 'line-dasharray':[2,1.2] }});
-    add({ id:'target-line', type:'line', source:'target', paint:{ 'line-color':'#00f0ff', 'line-width':2, 'line-dasharray':[2,2] }});
+    add({ id:'terr-fill', type:'fill', source:'terr', paint:{ 'fill-color':['get','color'], 'fill-opacity': g ? 0.42 : 0.28 }});
+    add({ id:'terr-glow', type:'line', source:'terr', paint:{ 'line-color':['get','color'], 'line-width': g?9:6, 'line-blur': g?7:4, 'line-opacity': g?0.6:0.35 }});
+    add({ id:'terr-line', type:'line', source:'terr', layout:{'line-join':'round'}, paint:{ 'line-color':['get','color'], 'line-width':2.5 }});
+    add({ id:'shield-line', type:'line', source:'shields', paint:{ 'line-color': g ? '#ffffff' : '#1f2937', 'line-width':1.2, 'line-dasharray':[2,3], 'line-opacity':0.45 }});
+    add({ id:'trail-casing', type:'line', source:'trails', layout:{'line-cap':'round','line-join':'round'}, paint:{ 'line-color':'#ffffff', 'line-width':8, 'line-opacity':0.9 }});
+    add({ id:'trail-line', type:'line', source:'trails', layout:{'line-cap':'round','line-join':'round'}, paint:{ 'line-color':['get','color'], 'line-width':4.5 }});
+    add({ id:'target-line', type:'line', source:'target', layout:{'line-cap':'round'}, paint:{ 'line-color':'#2b7cff', 'line-width':2.5, 'line-dasharray':[1,2], 'line-opacity':0.8 }});
   }
   map.on('style.load', () => { addOverlay(); setTimeout(scanPois, 600); });
   // belt & braces: if a style swap ever drops our layers, put them back
@@ -90,11 +91,11 @@ export const mapHtml = /* html */ `<!doctype html>
   // ---- markers ----
   const meEl = document.createElement('div'); meEl.className = 'me';
   const meMarker = new maplibregl.Marker({element: meEl});
-  const bots = {}; const pois = {};
+  const pois = {};
 
   function setMe(me){
     if (!me) return;
-    meEl.style.background = me.color; meEl.style.setProperty('--c', me.color + 'aa');
+    meEl.style.setProperty('--c', me.color); meEl.style.setProperty('--h', me.color + '66');
     meMarker.setLngLat([me.lng, me.lat]); if (!meMarker._map) meMarker.addTo(map);
     heading = me.heading ?? heading;
     const first = !last;
@@ -102,17 +103,6 @@ export const mapHtml = /* html */ `<!doctype html>
     last = [me.lng, me.lat];
     if (first) { map.jumpTo({ center:last }); setTimeout(scanPois, 1500); return; }
     if (follow && moved) map.easeTo({ center:last, bearing: mode==='tilt' ? heading : map.getBearing(), duration:700 });
-  }
-  function setBots(list){
-    const seen = {};
-    for (const b of list) {
-      seen[b.id] = 1;
-      let m = bots[b.id];
-      if (!m) { const el = document.createElement('div'); el.className = 'bot'; m = bots[b.id] = new maplibregl.Marker({element: el}).setLngLat([b.lng,b.lat]).addTo(map); }
-      const el = m.getElement(); el.style.background = b.color; el.textContent = b.name[0];
-      m.setLngLat([b.lng, b.lat]);
-    }
-    for (const id in bots) if (!seen[id]) { bots[id].remove(); delete bots[id]; }
   }
   function setPois(list){
     const seen = {};
@@ -132,12 +122,12 @@ export const mapHtml = /* html */ `<!doctype html>
       el.querySelector('.crown').textContent = p.holder ? '👑' : '';
       el.querySelector('.crown').style.filter = p.holderMine ? '' : 'grayscale(1) brightness(.8)';
       const b = el.querySelector('.b');
-      b.style.borderColor = p.tierColor || (p.holderColor || '#3a4152');
+      b.style.borderColor = p.tierColor || '#fff';
       const pr = Math.round((p.progress||0)*360);
-      el.querySelector('.ring').style.background = pr > 0 ? 'conic-gradient(#00f0ff ' + pr + 'deg, transparent 0)' : 'none';
+      el.querySelector('.ring').style.background = pr > 0 ? 'conic-gradient(#2b7cff ' + pr + 'deg, transparent 0)' : 'none';
       el.querySelector('.ring').style.mask = 'radial-gradient(circle, transparent 62%, #000 64%)';
       el.querySelector('.ring').style.webkitMask = 'radial-gradient(circle, transparent 62%, #000 64%)';
-      el.querySelector('.lv').textContent = p.badge ? (p.tierName + ' · ' + p.laps + (p.laps===1?' lap':' laps')) : p.name;
+      el.querySelector('.lv').textContent = p.name;
       el.style.zIndex = p.target ? 5 : p.badge ? 3 : 1;
     }
     for (const id in pois) if (!seen[id]) { pois[id].remove(); delete pois[id]; }
@@ -183,13 +173,15 @@ export const mapHtml = /* html */ `<!doctype html>
     try {
       if (msg.type === 'world') {
         for (const k of ['terr','trails','shields','target']) { data[k] = msg[k] || empty; const s = map.getSource(k); if (s) s.setData(data[k]); }
-        setBots(msg.bots || []);
         lastPoiList = msg.pois || []; setPois(lastPoiList);
         setMe(msg.me);
       } else if (msg.type === 'mode') setMode(msg.mode);
       else if (msg.type === 'recenter') {
         follow = true; post({type:'follow', on:true});
         if (last) map.easeTo({ center:last, zoom: Math.max(map.getZoom(), CAMERA[mode].zoom - 0.5), duration:600 });
+      } else if (msg.type === 'padding') {
+        document.documentElement.style.setProperty('--attr-bottom', (msg.bottom || 0) + 'px');
+        map.setPadding({ top: msg.top || 0, bottom: msg.bottom || 0, left: 0, right: 0 });
       } else if (msg.type === 'flyTo') {
         follow = false; post({type:'follow', on:false});
         map.flyTo({ center:[msg.lng, msg.lat], zoom: msg.zoom || 17, duration:1200 });

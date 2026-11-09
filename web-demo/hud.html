@@ -1,48 +1,76 @@
+<link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" />
 <style>
-  .hud{position:fixed;font:600 13px/1.3 system-ui,-apple-system,Segoe UI,sans-serif;color:#eef2ff;z-index:10}
-  .glass{background:rgba(14,17,24,.92);border:1px solid #262c3a;border-radius:16px}
-  #top{top:12px;left:12px;right:84px;pointer-events:none}
-  #pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:20px;max-width:100%}
-  #dot{width:9px;height:9px;border-radius:50%;flex:none}
-  #feed{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:8px}
-  .toast{padding:7px 11px;border-radius:12px;background:rgba(14,17,24,.94);border:1px solid #262c3a;font-weight:700;animation:in .25s ease}
-  .toast.good{border-color:#2f7d4a}.toast.bad{border-color:#8a2b3d;background:rgba(48,14,22,.94)}.toast.gold{border-color:#b38a1a;background:rgba(40,32,8,.94)}
+  :root{--text:#111827;--sub:#6b7280;--faint:#9ca3af;--line:#e5e7eb;--bg:#f4f5f7;--accent:#2b7cff;--soft:#e8f0ff;--good:#16a34a;--bad:#e11d48;--gold:#b7791f}
+  .hud{position:fixed;z-index:10;font:500 14px/1.3 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;color:var(--text)}
+  .shadow{box-shadow:0 4px 14px rgba(0,0,0,.14)}
+  .mi{font-family:'Material Icons Round';font-size:20px;line-height:1;font-style:normal;display:inline-block}
+  #top{top:12px;left:16px;right:76px;display:flex;flex-direction:column;align-items:flex-start;gap:8px;pointer-events:none}
+  .chip{display:inline-flex;align-items:center;gap:8px;background:#fff;border-radius:22px;padding:10px 14px;font-weight:600;max-width:100%}
+  .chip .mi{font-size:17px}
+  #toast{display:none;align-items:center;background:#fff;border-radius:14px;overflow:hidden;font-weight:600;animation:in .25s ease}
+  #toast i{width:4px;align-self:stretch;margin-right:12px}
+  #toast span{padding:10px 14px 10px 0}
   @keyframes in{from{opacity:0;transform:translateY(-6px)}}
-  #side{top:12px;right:12px;display:flex;flex-direction:column;gap:8px}
-  #side button,.chips button{font:inherit;color:#8a93a8;cursor:pointer}
-  #side button{width:62px;padding:6px 0;border-radius:14px;display:flex;flex-direction:column;align-items:center;font-size:9px;font-weight:800}
-  #side button span{font-size:18px}
-  #side button.on{background:#00f0ff;border-color:#00f0ff;color:#000}
-  #bottom{left:12px;right:12px;bottom:12px;display:flex;flex-direction:column;gap:8px}
-  #stats{display:flex;align-items:center;padding:12px;gap:12px}
-  #stats .sw{width:6px;align-self:stretch;border-radius:3px;background:#3dd6ff}
-  .lbl{color:#8a93a8;font-size:10px;font-weight:800;letter-spacing:1.2px}
-  .val{font-size:20px;font-weight:800}.val small{color:#8a93a8;font-size:14px}
-  .chips{display:flex;gap:6px;align-items:center;margin-left:auto}
-  .chips button{background:none;border:1px solid #3a4152;border-radius:10px;padding:4px 9px;font-weight:800}
-  .chips button.on{background:#ffd23f;border-color:#ffd23f;color:#000}
-  #panel{padding:8px 12px;max-height:24vh;overflow:auto}
-  .lb,.bd{display:flex;align-items:center;gap:8px;padding:4px 0}
-  .lb b{width:14px;color:#8a93a8}.lb i{width:10px;height:10px;border-radius:50%}.lb span,.bd span{flex:1}.lb em,.bd em{font-style:normal;font-weight:800}
-  .bd{border-left:3px solid;padding-left:8px;margin:3px 0}
-  .dim{color:#8a93a8;font-weight:500}
-  .h{color:#8a93a8;font-size:10px;font-weight:800;letter-spacing:1.2px;margin:6px 0 2px}
-  #hint{font-size:11px;color:#8a93a8;font-weight:500;text-align:center}
+  #controls{top:12px;right:16px;display:flex;flex-direction:column;gap:10px}
+  .round{width:46px;height:46px;border-radius:50%;background:#fff;border:0;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text)}
+  .round.on{background:var(--soft);color:var(--accent)}
+  #layers{display:none;top:12px;right:72px;background:#fff;border-radius:18px;padding:16px}
+  #layers .t,.lbl{color:var(--sub);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  #layers .row{display:flex;gap:10px;margin-top:10px}
+  #layers button{width:72px;background:none;border:0;cursor:pointer;font:600 12px system-ui;color:var(--sub);display:flex;flex-direction:column;align-items:center;gap:6px}
+  #layers button b{width:56px;height:56px;border-radius:14px;border:2px solid var(--line);background:var(--bg);display:flex;align-items:center;justify-content:center}
+  #layers button.on{color:var(--accent)} #layers button.on b{border-color:var(--accent);background:var(--soft)}
+  #bottom{left:12px;right:12px;bottom:12px;display:flex;flex-direction:column;gap:10px}
+  .card{background:#fff;border-radius:22px;padding:18px}
+  #stats{display:flex;align-items:center;gap:6px}
+  .big{font-size:28px;font-weight:700;margin-top:2px}
+  .sub{color:var(--sub);font-size:13px;margin-top:2px}
+  .act{width:70px;display:flex;flex-direction:column;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--sub);cursor:pointer}
+  .act b{width:48px;height:48px;border-radius:50%;background:var(--soft);color:var(--accent);display:flex;align-items:center;justify-content:center}
+  .act.on b{background:var(--accent);color:#fff}
+  #sim{display:flex;align-items:center;gap:8px;background:#fffaf0;border-radius:16px;padding:10px 14px;color:#7c5a10;font-weight:600;font-size:13px}
+  #sim span{flex:1}
+  #sim button{border:0;border-radius:12px;padding:5px 10px;background:#f3e7cc;color:#7c5a10;font:700 12px system-ui;cursor:pointer}
+  #sim button.on{background:var(--gold);color:#fff}
+  #place{display:none}
+  .prow{display:flex;align-items:center;gap:12px}
+  .pic{width:52px;height:52px;border-radius:50%;border:3px solid var(--line);background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:24px}
+  .ttl{font-size:19px;font-weight:700}
+  .x{width:32px;height:32px;border-radius:50%;background:var(--bg);border:0;cursor:pointer;color:var(--sub);display:flex;align-items:center;justify-content:center}
+  .tier{font-weight:700;font-size:15px;margin-top:18px}
+  .bar{height:6px;background:var(--bg);border-radius:3px;margin-top:10px;overflow:hidden}.bar i{display:block;height:6px;background:var(--accent);border-radius:3px}
+  .hint{color:var(--faint);font-size:12px;margin-top:10px}
+  .btn{margin-top:14px;width:100%;border:0;border-radius:14px;padding:13px;background:var(--accent);color:#fff;font:700 15px system-ui;cursor:pointer;display:flex;gap:6px;align-items:center;justify-content:center}
 </style>
-<div id="top" class="hud"><div id="pill" class="glass"><span id="dot"></span><span id="status">Loading…</span></div><div id="feed"></div></div>
-<div id="side" class="hud">
-  <button class="glass" data-mode="street"><span>🗺️</span>Street</button>
-  <button class="glass" data-mode="gods"><span>🛰️</span>God's Eye</button>
-  <button class="glass" data-mode="tilt"><span>🏙️</span>3D</button>
-  <button class="glass" id="recenter"><span>🎯</span>Center</button>
+<div id="top" class="hud">
+  <div class="chip shadow"><i class="mi" id="sicon">home</i><span id="status">Loading…</span></div>
+  <div id="toast" class="shadow"><i></i><span></span></div>
+</div>
+<div id="controls" class="hud">
+  <button class="round shadow" id="layersBtn"><i class="mi">layers</i></button>
+  <button class="round shadow" id="recenter" style="color:var(--accent)"><i class="mi">my_location</i></button>
+</div>
+<div id="layers" class="hud shadow">
+  <div class="t">Map view</div>
+  <div class="row">
+    <button data-mode="street"><b><i class="mi">map</i></b>Map</button>
+    <button data-mode="gods"><b><i class="mi">satellite_alt</i></b>God's Eye</button>
+    <button data-mode="tilt"><b><i class="mi">location_city</i></b>3D</button>
+  </div>
 </div>
 <div id="bottom" class="hud">
-  <div id="panel" class="glass"><div class="h">LEADERBOARD</div><div id="board"></div><div class="h">BADGES</div><div id="badges"></div></div>
-  <div id="stats" class="glass">
-    <div class="sw"></div>
-    <div><div class="lbl">YOUR LAND</div><div class="val" id="land">0 m²</div></div>
-    <div><div class="lbl">RANK</div><div class="val" id="rank">#1</div></div>
-    <div class="chips"><span class="lbl">SPEED</span><button data-turbo="1">1×</button><button data-turbo="3">3×</button><button data-turbo="8">8×</button></div>
+  <div id="sim" class="shadow"><i class="mi" style="font-size:16px">science</i><span>Simulating · click map to walk</span>
+    <button data-turbo="1">1×</button><button data-turbo="4">4×</button><button data-turbo="10">10×</button></div>
+  <div id="place" class="card shadow">
+    <div class="prow"><div class="pic" id="pemoji"></div><div style="flex:1;min-width:0"><div class="ttl" id="pname"></div><div class="sub" id="pmeta"></div></div><button class="x" id="pclose"><i class="mi" style="font-size:18px">close</i></button></div>
+    <div class="tier" id="ptier"></div><div class="sub" id="plaps"></div>
+    <div class="bar"><i id="pbar" style="width:0"></i></div>
+    <div class="hint">Walk all the way around it, staying within 150 m, to count a lap.</div>
+    <button class="btn" id="plap"><i class="mi" style="font-size:18px">replay</i>Walk a lap around it</button>
   </div>
-  <div id="hint">Click the map to walk there · click a place to walk a lap around it</div>
+  <div id="stats" class="card shadow">
+    <div style="flex:1"><div class="lbl">Your land</div><div class="big" id="land">0 m²</div><div class="sub" id="bsum">0 badges · 0 laps</div></div>
+    <div class="act" id="placesBtn"><b><i class="mi">search</i></b>Places</div>
+    <div class="act on"><b><i class="mi">directions_walk</i></b>Simulate</div>
+  </div>
 </div>

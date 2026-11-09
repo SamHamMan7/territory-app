@@ -51,7 +51,10 @@ export const GameMap = React.memo(function GameMap() {
     let m: any;
     try { m = JSON.parse(e.nativeEvent.data); } catch { return; }
     switch (m.type) {
-      case 'ready': setReady(true); setError(null); break;
+      case 'ready':
+        setReady(true); setError(null);
+        if (lastPadding) send({ type: 'padding', ...lastPadding });
+        break;
       case 'tap': actions.simTap(m.lng, m.lat); actions.selectPlace(null); break;
       case 'poi': actions.selectPlace(m.id); break;
       case 'pois': actions.addTilePlaces(m.items); break;
@@ -88,13 +91,16 @@ const SOURCE = { html: mapHtml, baseUrl: 'https://territory.app/' };
 const ORIGINS = ['*'];
 
 let cameraBus: ((m: object) => void) | null = null;
+let lastPadding: { top: number; bottom: number } | null = null;
 export const camera = {
   recenter: () => cameraBus?.({ type: 'recenter' }),
   flyTo: (lng: number, lat: number, zoom = 17) => cameraBus?.({ type: 'flyTo', lng, lat, zoom }),
+  /** Keep the map's focus clear of overlaid UI (and keep the OSM credit visible). */
+  padding: (top: number, bottom: number) => { lastPadding = { top, bottom }; cameraBus?.({ type: 'padding', top, bottom }); },
 };
 
 const styles = StyleSheet.create({
-  web: { flex: 1, backgroundColor: '#0b0d12' },
-  err: { position: 'absolute', top: '45%', alignSelf: 'center', backgroundColor: '#2a1015', padding: 14, borderRadius: 12 },
-  errText: { color: '#ffb3c0', fontWeight: '600' },
+  web: { flex: 1, backgroundColor: '#f2efe9' },
+  err: { position: 'absolute', top: '45%', alignSelf: 'center', backgroundColor: '#fff', padding: 14, borderRadius: 12 },
+  errText: { color: '#e11d48', fontWeight: '600' },
 });

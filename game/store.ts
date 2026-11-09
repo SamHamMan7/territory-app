@@ -7,9 +7,8 @@ import * as Location from 'expo-location';
 import { useSyncExternalStore } from 'react';
 
 import { BadgeState, emptyBadges, trackLaps } from './badges';
-import { BotBrain, spawnBots, tickBots } from './bots';
-import { CONFIG, PLAYER_COLORS } from './config';
-import { Fix, GameEvent, World, areaOf, newPlayer, plantHome, processFix } from './engine';
+import { CONFIG, MY_COLOR } from './config';
+import { Fix, GameEvent, Player, World, areaOf, newPlayer, plantHome, processFix } from './engine';
 import { LngLat, bearing, distance, offset, pathLength, pointInMulti, projector } from './geo';
 import { Place, makePlace } from './places';
 
@@ -20,7 +19,6 @@ export type GameState = {
   loaded: boolean;
   meId: string;
   world: World;
-  brains: BotBrain[];
   badges: BadgeState;
   places: Record<string, Place>;
   target: Place | null;
@@ -41,7 +39,6 @@ let state: GameState = {
   loaded: false,
   meId: ME,
   world: { players: {} },
-  brains: [],
   badges: emptyBadges(),
   places: {},
   target: null,
@@ -111,10 +108,6 @@ function narrate(events: GameEvent[]) {
           }
         }
         break;
-      case 'cut':
-        if (e.by === ME) toast(`✂️ You cut ${nameOf(e.victim)}'s trail`, 'gold');
-        else if (e.victim === ME) toast(`✂️ ${nameOf(e.by)} cut your trail!`, 'bad');
-        break;
       case 'trail-broken':
         if (e.playerId === ME)
           toast(e.reason === 'too-fast' ? '🚗 Too fast — trail dropped. Walk to capture!' : 'GPS lost — trail dropped', 'bad');
@@ -145,7 +138,7 @@ async function save() {
     await AsyncStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        v: 2, world: state.world, brains: state.brains, badges: { places: state.badges.places, winding: {} },
+        v: 3, world: state.world, badges: { places: state.badges.places, winding: {} },
         places, mode: state.mode, clockOffset,
       }),
     );
@@ -162,7 +155,10 @@ async function load() {
       clockOffset = d.clockOffset ?? 0;
       const places: Record<string, Place> = {};
       for (const p of d.places ?? []) places[p.id] = p;
-      state = { ...state, world: d.world, brains: d.brains ?? [], badges: d.badges ?? emptyBadges(), places, mode: d.mode ?? 'street' };
+      // older saves had simulated rivals — drop them
+      const players: Record<string, Player> = {};
+      if (d.world?.players?.[ME]) players[ME] = { ...d.world.players[ME], color: MY_COLOR };
+      state = { ...state, world: { players }, badges: d.badges ?? emptyBadges(), places, mode: d.mode ?? 'street' };
       // positions are stale after a restart
       for (const p of Object.values(state.world.players)) if (!p.isBot) { p.pos = null; p.trail = []; p.speed = 0; }
     }
@@ -170,8 +166,7 @@ async function load() {
     console.warn('load failed', e);
   }
   if (!state.world.players[ME]) {
-    const color = PLAYER_COLORS[Math.floor(Math.random() * 2)];
-    state.world.players[ME] = newPlayer(ME, 'You', color, false);
+    state.world.players[ME] = newPlayer(ME, 'You', MY_COLOR, false);
   }
   set({ loaded: true });
 }
@@ -194,9 +189,6 @@ export function handleFix(fix: Fix) {
     const a = bearing(prev, me.pos);
     state.heading = (90 - (a * 180) / Math.PI + 360) % 360;
   }
-
-  // Spawn rivals once we know where you are.
-  if (!state.brains.length && me.pos) state.brains = spawnBots(world, me.pos, fix.t, me.color);
 
   // Landmark laps
   if (me.pos) {
@@ -245,22 +237,6 @@ export async function startGame() {
   started = true;
   await load();
   startGps();
-
-  // Rivals
-  let lastBot = gameNow();
-  setInterval(() => {
-    const now = gameNow();
-    const dt = Math.min(now - lastBot, 5000 * state.sim.turbo);
-    lastBot = now;
-    if (!state.brains.length || !state.world.players[ME]?.pos) return;
-    // fast-forward bots in sub-steps so turbo doesn't make them teleport
-    const steps = Math.max(1, Math.ceil(dt / CONFIG.BOT_TICK_MS));
-    const evs: GameEvent[] = [];
-    for (let i = 1; i <= steps; i++) evs.push(...tickBots(state.world, state.brains, ME, now - dt + (dt * i) / steps, dt / steps));
-    narrate(evs);
-    dirty = true;
-    emit();
-  }, CONFIG.BOT_TICK_MS);
 
   // Walk simulator
   const SIM_MS = 400;
@@ -348,19 +324,13 @@ export const actions = {
     await AsyncStorage.removeItem(STORAGE_KEY);
     clockOffset = 0;
     simPos = null;
-    const me = newPlayer(ME, 'You', state.world.players[ME]?.color ?? PLAYER_COLORS[0], false);
-    set({ world: { players: { [ME]: me } }, brains: [], badges: emptyBadges(), target: null, feed: [] });
+    const me = newPlayer(ME, 'You', MY_COLOR, false);
+    set({ world: { players: { [ME]: me } }, badges: emptyBadges(), target: null, feed: [] });
     toast('World reset', 'info');
   },
 };
 
 // ---------- derived helpers for screens ----------
-export function leaderboard(s: GameState) {
-  return Object.values(s.world.players)
-    .map((p) => ({ id: p.id, name: p.name, color: p.color, area: areaOf(p), isMe: p.id === s.meId, stats: p.stats }))
-    .sort((a, b) => b.area - a.area);
-}
-
 export function myStatus(s: GameState) {
   const me = s.world.players[s.meId];
   if (!me) return null;

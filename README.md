@@ -25,14 +25,14 @@ Open `web-demo/index.html` in a browser (or run `npx serve web-demo`). It's the 
 | Leave your land to draw a trail. Get back to your land (or cross your own trail) to claim the loop and anything it surrounds. | | |
 | **Walking only:** over about 10 km/h your trail is dropped. | 2.8 m/s | `MAX_SPEED_MS` |
 | **Grace zone:** GPS is sloppy, so coming within 8 m of your land, or within 10 m of an older part of your trail, closes the loop. | 8 m / 10 m | `SNAP_TO_*` |
-| **Stealing:** a loop that covers a rival's land takes it. | | |
+| **Stealing (for multiplayer):** a loop that covers another player's land takes it. | | |
 | **Shield:** land you just captured can't be stolen for 30 min. | 30 min | `SHIELD_MS` |
-| **Cutting:** walk across a rival's trail and it's erased. | | |
+| **No paper.io deaths:** if someone walks across your trail, nothing happens. Your trail only ends when you close a loop, go too fast, or lose GPS for 5+ minutes. | | |
 | **Laps:** go a full 360° around a place, staying within 150 m of it. | | `LAP_*` |
 | Badge tiers | Bronze 1 · Silver 3 · Gold 7 · Platinum 15 · Diamond 30 · Legend 50 | `LAP_TIERS` |
 | Chains like McDonald's or Starbucks roll up into one **collection** badge across all their locations. | | `game/places.ts` |
 
-Holding a place (👑) and having a badge for it are separate. Holding means its spot is inside your land, and rivals can take that. Badges are yours to keep.
+Holding a place (👑) and having a badge for it are separate. Holding means its spot is inside your land, which other players will be able to take once multiplayer exists. Badges are yours to keep.
 
 All tuning lives in `game/config.ts`.
 
@@ -53,14 +53,13 @@ game/
   engine.ts   the rules: trails, claiming, stealing, shields, speed gate
   badges.ts   lap detection (winding angle) + tiers
   places.ts   OSM places, chain/brand grouping, search
-  bots.ts     simulated free-for-all rivals
   render.ts   game state → GeoJSON for the map
   store.ts    game loop, GPS, sim, persistence
 components/map/
   GameMap.tsx WebView bridge
   mapHtml.ts  the MapLibre page
 app/(tabs)/index.tsx    Map screen
-app/(tabs)/explore.tsx  Badges + leaderboard
+app/(tabs)/explore.tsx  Badges
 scripts/engine.test.ts  rule tests: npm run test:engine
 web-demo/               browser demo (npm run demo:build)
 ```
